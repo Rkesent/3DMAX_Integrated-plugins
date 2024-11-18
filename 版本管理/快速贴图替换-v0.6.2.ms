@@ -36,10 +36,6 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     button btnConvertToStandard "转化为标准材质" pos:[10,370] width:100 height:20
     button btnConvertToVR "转化为VR材质" pos:[10,390] width:100 height:20
 
-    -- 在现有按钮后添加新按钮
-    button btnRename "重命名" pos:[120,370] width:100 height:40
-    button btnCheckModelID "模型ID数检查" pos:[230,370] width:100 height:40
-
     -- 初始化日志文本框
     fn initLogTextBox =
     (
@@ -76,16 +72,10 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         lvModels.FullRowSelect = true
         lvModels.MultiSelect = true
         lvModels.Columns.Clear()
-        
-        -- 重新设置列宽和位置
-        local col1 = lvModels.Columns.Add "模型名称" 100
-        local col2 = lvModels.Columns.Add "材质" 100
-        local col3 = lvModels.Columns.Add "ID" 50
-        local col4 = lvModels.Columns.Add "丢失贴图名称" 130
-        local col5 = lvModels.Columns.Add "错误信息" 100
-        
-        -- 设置列表总宽度以避免出现空列
-        lvModels.width = 400  -- 调整总宽度为所有列宽之和
+        lvModels.Columns.Add "模型名称" 100
+        lvModels.Columns.Add "材质" 100
+        lvModels.Columns.Add "ID" 50
+        lvModels.Columns.Add "丢失贴图名称" 130
     )
 
     -- 检查缺少的文件
@@ -184,8 +174,6 @@ rollout replaceMissingMapsRollout "快速贴图替换"
             item.SubItems.Add map[2]
             item.SubItems.Add (map[3] as string)
             item.SubItems.Add map[4]
-            local errorMsg = "贴图丢失"
-            item.SubItems.Add errorMsg
             lvModels.Items.Add item
         )
 
@@ -201,7 +189,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         logMessage += "------------------------ \r\n"
         logMessage += "总模型数: " + totalModels as string + "个\r\n总贴图数: " + totalMaps as string + "张\r\n"
         logMessage += "丢失模型数: " + missingModelsCount as string + "个\r\n丢失贴图数: " + missingMapsCount as string + "张\r\n"
-        logMessage += "检查\r\n耗时: " + elapsedTime as string + " 秒\r\n"
+        logMessage += "检查完毕\r\n耗时: " + elapsedTime as string + " 秒\r\n"
         logMessage += "###########$$$########## \r\n"
 
         insertLog logMessage
@@ -252,44 +240,52 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     -- 替换按钮点击事件
     on btnReplace pressed do
     (
-        -- 先执行检查
-        checkMissingFiles()
-        
-        -- 检查完成后，如果没有丢失的贴图则提示并返回
-        if missingMaps.count == 0 then
-        (
-            messageBox "未检测到能替换的贴图！" title:"提示"
-            return undefined
-        )
-        
-        -- 如果有丢失的贴图，继续执行替换操作
         local selectedFile = getOpenFileName caption:"选择替换贴图" types:"图像文件(*.jpg;*.png;*.tga)|*.jpg;*.png;*.tga|所有文件(*.*)|*.*|"
         if selectedFile != undefined do
         (
             local successCount = 0
             local failCount = 0
             
-            for map in missingMaps do
+            if missingMaps.count > 0 then
             (
-                local obj = getNodeByName map[1]
-                if obj != undefined do
+                for map in missingMaps do
                 (
-                    local mat = obj.material
-                    if classof mat == Multimaterial then
+                    local obj = getNodeByName map[1]
+                    if obj != undefined do
                     (
-                        local subMat = mat[map[3]]
-                        if subMat != undefined then
+                        local mat = obj.material
+                        if classof mat == Multimaterial then
                         (
-                            local diffuseMap = case classof subMat of
+                            local subMat = mat[map[3]]
+                            if subMat != undefined then
                             (
-                                StandardMaterial: subMat.diffuseMap
-                                VRayMtl: subMat.texmap_diffuse
-                                PhysicalMaterial: subMat.base_color_map
-                                default: undefined
+                                local diffuseMap = case classof subMat of
+                                (
+                                    StandardMaterial: subMat.diffuseMap
+                                    VRayMtl: subMat.texmap_diffuse
+                                    PhysicalMaterial: subMat.base_color_map
+                                    default: undefined
+                                )
+                                if diffuseMap != undefined then
+                                (
+                                    diffuseMap.filename = selectedFile
+                                    successCount += 1
+                                )
+                                else
+                                (
+                                    failCount += 1
+                                )
                             )
-                            if diffuseMap != undefined then
+                            else
                             (
-                                diffuseMap.filename = selectedFile
+                                failCount += 1
+                            )
+                        )
+                        else if classof mat == Standardmaterial then
+                        (
+                            if mat.diffuseMap != undefined then
+                            (
+                                mat.diffuseMap.filename = selectedFile
                                 successCount += 1
                             )
                             else
@@ -297,24 +293,12 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                                 failCount += 1
                             )
                         )
-                        else
-                        (
-                            failCount += 1
-                        )
-                    )
-                    else if classof mat == Standardmaterial then
-                    (
-                        if mat.diffuseMap != undefined then
-                        (
-                            mat.diffuseMap.filename = selectedFile
-                            successCount += 1
-                        )
-                        else
-                        (
-                            failCount += 1
-                        )
                     )
                 )
+            )
+            else
+            (
+                messageBox "没有丢失的贴图需要替换。"
             )
 
             local logMessage = "替换成功的模型数量: " + successCount as string + "\r\n"
@@ -328,94 +312,90 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     -- 更换贴图路径按钮点击事件
     on btnChangePath pressed do
     (
-        -- 先执行检查
-        checkMissingFiles()
-        
-        -- 检查完成后，如果没有丢失的贴图则提示并返回
-        if missingMaps.count == 0 then
+        if missingMaps.count > 0 then
         (
-            messageBox "列表中未检测到丢失贴图的模型。" title:"提示"
-            return undefined
-        )
-        
-        -- 如果有丢失的贴图，继续执行更换路径操作
-        local newPath = getSavePath caption:"选择新的贴图路径"
-        if newPath != undefined do
-        (
-            local startTime = timestamp()
-            local missingFilesLog = ""
-            local uniqueMissingMaps = #()
-            local processedCount = 0
-            
-            for map in missingMaps do
+            local newPath = getSavePath caption:"选择新的贴图路径"
+            if newPath != undefined do
             (
-                local objName = map[1]
-                local matName = map[2]
-                local subMatIndex = map[3]
-                local originalFileName = map[4]
-
-                -- 获取文件名和后缀
-                local fileBaseName = getFilenameFile originalFileName
-                local fileExtension = getFilenameType originalFileName
-
-                -- 新的完整文件路径
-                local newFilePath = newPath + "\\" + fileBaseName + fileExtension
-
-                -- 查找对象
-                local obj = getNodeByName objName
-                if obj != undefined and obj.material != undefined then
+                local startTime = timestamp()
+                local missingFilesLog = ""
+                local uniqueMissingMaps = #()
+                local processedCount = 0
+                
+                for map in missingMaps do
                 (
-                    local mat = obj.material
-                    if classof mat == Multimaterial then
+                    local objName = map[1]
+                    local matName = map[2]
+                    local subMatIndex = map[3]
+                    local originalFileName = map[4]
+
+                    -- 获取文件名和后缀
+                    local fileBaseName = getFilenameFile originalFileName
+                    local fileExtension = getFilenameType originalFileName
+
+                    -- 新的完整文件路径
+                    local newFilePath = newPath + "\\" + fileBaseName + fileExtension
+
+                    -- 查找对象
+                    local obj = getNodeByName objName
+                    if obj != undefined and obj.material != undefined then
                     (
-                        local subMat = mat[subMatIndex]
-                        if subMat != undefined then
+                        local mat = obj.material
+                        if classof mat == Multimaterial then
                         (
-                            local diffuseMap = case classof subMat of
+                            local subMat = mat[subMatIndex]
+                            if subMat != undefined then
                             (
-                                StandardMaterial: subMat.diffuseMap
-                                VRayMtl: subMat.texmap_diffuse
-                                PhysicalMaterial: subMat.base_color_map
-                                default: undefined
+                                local diffuseMap = case classof subMat of
+                                (
+                                    StandardMaterial: subMat.diffuseMap
+                                    VRayMtl: subMat.texmap_diffuse
+                                    PhysicalMaterial: subMat.base_color_map
+                                    default: undefined
+                                )
+                                if diffuseMap != undefined then
+                                (
+                                    diffuseMap.filename = newFilePath
+                                    processedCount += 1
+                                )
                             )
-                            if diffuseMap != undefined then
+                        )
+                        else if classof mat == Standardmaterial then
+                        (
+                            if mat.diffuseMap != undefined then
                             (
-                                diffuseMap.filename = newFilePath
+                                mat.diffuseMap.filename = newFilePath
                                 processedCount += 1
                             )
                         )
                     )
-                    else if classof mat == Standardmaterial then
+
+                    -- 检查新路径中是否存在文件，只记录文件名
+                    if not doesFileExist newFilePath and not (arrayContains uniqueMissingMaps (fileBaseName + fileExtension)) then
                     (
-                        if mat.diffuseMap != undefined then
-                        (
-                            mat.diffuseMap.filename = newFilePath
-                            processedCount += 1
-                        )
+                        missingFilesLog += "文件不存在: " + (fileBaseName + fileExtension) + "\r\n"
+                        append uniqueMissingMaps (fileBaseName + fileExtension)
                     )
                 )
+                
+                local endTime = timestamp()
+                local elapsedTime = (endTime - startTime) / 1000.0
+                
+                -- 确保所有变量都有值
+                local logMessage = "------------------------ \r\n"
+                logMessage += "处理完成\r\n"
+                logMessage += "更新贴图数量: " + (processedCount as string) + "\r\n"
+                logMessage += "耗时: " + (elapsedTime as string) + " 秒\r\n"
+                logMessage += "------------------------ \r\n"
+                logMessage += missingFilesLog -- 确保 missingFilesLog 有值
+                insertLog logMessage
 
-                -- 检查新路径中是否存在文件，只记录文件名
-                if not doesFileExist newFilePath and not (arrayContains uniqueMissingMaps (fileBaseName + fileExtension)) then
-                (
-                    missingFilesLog += "文件不存在: " + (fileBaseName + fileExtension) + "\r\n"
-                    append uniqueMissingMaps (fileBaseName + fileExtension)
-                )
+                messageBox "请等待3秒路径更新中。"
             )
-            
-            local endTime = timestamp()
-            local elapsedTime = (endTime - startTime) / 1000.0
-            
-            -- 确保所有变量都有值
-            local logMessage = "------------------------ \r\n"
-            logMessage += "处理完成\r\n"
-            logMessage += "更新贴图数量: " + (processedCount as string) + "\r\n"
-            logMessage += "耗时: " + (elapsedTime as string) + " 秒\r\n"
-            logMessage += "------------------------ \r\n"
-            logMessage += missingFilesLog -- 确保 missingFilesLog 有值
-            insertLog logMessage
-
-            messageBox "请等待3秒路径更新中。/n (点击确认后开始执行)"
+        )
+        else
+        (
+            messageBox "没有需要更换路径的丢失文件。"
         )
     )
     -- 递归函数，用于转换材质
@@ -516,7 +496,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         catch
         (
             print ("Error converting material: " + (getCurrentException()))
-            mtl -- 返回原始材质，如果转失败
+            mtl -- 返回原始材质，如果转换失败
         )
     )
     -- 清除日志按钮点击事件
@@ -587,105 +567,6 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         logMessage += "<<暂时请勿操作:请等待2秒>>\r\n"
         logMessage += "------------------------ \r\n"
         insertLog logMessage
-    )
-
-    -- 添加重命名弹窗rollout
-    rollout renameRollout "重命名工具" width:550 height:250
-    (
-        local labelColor = (color 180 180 180) -- 标签文字颜色
-
-        -- 模型命名组
-        GroupBox grp1 "模型命名" pos:[10,10] width:400 height:100
-        
-        -- 模型命名标签行
-        label lbl1 "基础代号" pos:[20,35] width:60 height:20 textColor:labelColor
-        label plus1 "+" pos:[90,60] width:10 height:10 textColor:labelColor 
-        label lbl2 "城市名称" pos:[100,35] width:60 height:20 textColor:labelColor
-        label plus2 "+" pos:[170,60] width:10 height:10 textColor:labelColor 
-        label lbl3 "项目名称" pos:[180,35] width:60 height:20 textColor:labelColor
-        label plus3 "+" pos:[250,60] width:10 height:10 textColor:labelColor 
-        label lbl4 "姓名简写" pos:[260,35] width:60 height:20 textColor:labelColor
-        label plus4 "+" pos:[330,60] width:10 height:10 textColor:labelColor
-        label lbl5 "起始位" pos:[340,35] width:40 height:20 textColor:labelColor
-        
-        -- 模型命名输入框行
-        editText base1 "" pos:[20,55] width:60 height:20
-        editText city1 "" pos:[100,55] width:60 height:20
-        editText proj1 "" pos:[180,55] width:60 height:20
-        editText abbr1 "" pos:[260,55] width:60 height:20
-        spinner start1 "" pos:[340,55] width:40 height:30 range:[0,999,1] type:#integer scale:1
-        
-        -- 选择和填充位
-        radioButtons rad1 "" pos:[20,80] width:150 height:20 labels:#("选择", "全部") columns:2
-        label fill1 "填充位:" pos:[300,80] width:40 height:20 textColor:labelColor
-        spinner fillNum1 "" pos:[340,80] width:40 height:30 range:[0,10,3] type:#integer scale:1
-        
-        -- 材质命名组
-        GroupBox grp2 "材质命名" pos:[10,120] width:400 height:100    
-        -- 材质命名标签行
-        label lbl6 "基础代号" pos:[20,145] width:60 height:20 textColor:labelColor
-        label plus5 "+" pos:[90,165] width:10 height:20 textColor:labelColor
-        label lbl7 "城市名称" pos:[100,145] width:60 height:20 textColor:labelColor
-        label plus6 "+" pos:[170,165] width:10 height:20 textColor:labelColor
-        label lbl8 "项目名称" pos:[180,145] width:60 height:20 textColor:labelColor
-        label plus7 "+" pos:[250,165] width:10 height:20 textColor:labelColor
-        label lbl9 "姓名简写" pos:[260,145] width:60 height:20 textColor:labelColor
-        label plus8 "+" pos:[330,165] width:10 height:20 textColor:labelColor
-        label lbl10 "起始位" pos:[340,145] width:40 height:20 textColor:labelColor
-        
-        -- 材质命名输入框行
-        editText base2 "" pos:[20,165] width:60 height:20
-        editText city2 "" pos:[100,165] width:60 height:20
-        editText proj2 "" pos:[180,165] width:60 height:20
-        editText abbr2 "" pos:[260,165] width:60 height:20
-        spinner start2 "" pos:[340,165] width:40 height:30 range:[0,999,1] type:#integer scale:1
-        
-        -- 选择和填充位
-        radioButtons rad2 "" pos:[20,190] width:150 height:20 labels:#("选择", "全部") columns:2
-        label fill2 "填充位:" pos:[300,190] width:40 height:20 textColor:labelColor
-        spinner fillNum2 "" pos:[340,190] width:40 height:30 range:[0,10,3] type:#integer scale:1
-        
-        -- 右侧预览区域
-        GroupBox previewGrp "命名预览" pos:[420,10] width:120 height:90
-        editText preview "" pos:[430,30] width:100 height:60
-        
-        -- 底部按钮
-        button renameBtn "重命名" pos:[420,110] width:120 height:30
-        button useTextureBtn "将贴图名称作为材质名称" pos:[420,150] width:120 height:40
-
-        -- 重命名按钮事件
-        on renameBtn pressed do
-        (
-            -- 暂时只显示消息，具体重命名功能后续实现
-            messageBox "重命名功能将在后续版本中实现" title:"提示"
-            DestroyDialog renameRollout
-        )
-
-        -- 使用贴图名称按钮事件
-        on useTextureBtn pressed do
-        (
-            -- 暂时只显示消息，具体功能后续实现
-            messageBox "使用贴图名称功能将在后续版本中实现" title:"提示"
-        )
-    )
-
-    -- 修改主界面中重命名按钮的事件处理程序
-    on btnRename pressed do
-    (
-        try
-        (
-            -- 直接创建重命名弹窗，不检查选中状态
-            createDialog renameRollout modal:true
-        )
-        catch
-        (
-            messageBox ("创建重命名窗口时发生错误：" + (getCurrentException())) title:"错误"
-        )
-    )
-
-    on btnCheckModelID pressed do
-    (
-        -- 模型ID数检查功能将在后续实现
     )
 
     -- 初始化
