@@ -26,8 +26,9 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     groupBox grpLog "操作日志" pos:[420,170] width:200 height:140
     dotNetControl edtLog "System.Windows.Forms.RichTextBox" pos:[430,190] width:180 height:110
 
-    -- ID限制下拉框
-    dotNetControl cmbIDLimit "System.Windows.Forms.ComboBox" pos:[340,370] width:60 height:40
+    -- ID限制下拉框和标签
+    label lblIDLimit "ID限制:" pos:[335,370] width:50 height:20
+    dotNetControl cmbIDLimit "System.Windows.Forms.ComboBox" pos:[330,385] width:60 height:40
 
     -- 按钮
     button btnCheck "检查" pos:[10,320] width:100 height:40
@@ -59,7 +60,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
             if cmbIDLimit != undefined then
             (
                 cmbIDLimit.Items.Clear()
-                local idLimits = #(8, 16, 32, 64, 128)
+                local idLimits = #(4, 8, 12, 20)
                 for limit in idLimits do
                     cmbIDLimit.Items.Add (limit as string)
                 cmbIDLimit.SelectedIndex = 2
@@ -109,7 +110,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         local col1 = lvModels.Columns.Add "模型名称" 100
         local col2 = lvModels.Columns.Add "材质" 100
         local col3 = lvModels.Columns.Add "ID" 50
-        local col4 = lvModels.Columns.Add "丢失贴图名称" 130
+        local col4 = lvModels.Columns.Add "丢失贴图名称" 100
         local col5 = lvModels.Columns.Add "错误信息" 100
         
         -- 设置列表总宽度以避免出现空列
@@ -228,7 +229,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         )
         logMessage += "------------------------ \r\n"
         logMessage += "总模型数: " + totalModels as string + "个\r\n总贴图数: " + totalMaps as string + "张\r\n"
-        logMessage += "丢失模型数: " + missingModelsCount as string + "个\r\n丢失贴图数: " + missingMapsCount as string + "张\r\n"
+        logMessage += "丢失��型数: " + missingModelsCount as string + "个\r\n丢失贴图数: " + missingMapsCount as string + "张\r\n"
         logMessage += "检查\r\n耗时: " + elapsedTime as string + " 秒\r\n"
         logMessage += "###########$$$########## \r\n"
 
@@ -244,7 +245,15 @@ rollout replaceMissingMapsRollout "快速贴图替换"
             if selectedObj != undefined then
             (
                 select selectedObj
-                local materialCount = if selectedObj.material != undefined then selectedObj.material.count else 0
+                local materialCount = 0
+                if selectedObj.material != undefined then
+                (
+                    if classof selectedObj.material == MultiMaterial then
+                        materialCount = selectedObj.material.numsubs
+                    else
+                        materialCount = 1
+                )
+                
                 local quadFaceCount = 0
 
                 if isKindOf selectedObj Editable_Poly then
@@ -256,7 +265,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                     triFaceCount = selectedObj.numFaces
                 )
 
-                edtModelInfo.text = "名称: " + selectedObj.name + "\r\n材质ID数量: " + materialCount as string + "个\r\n四边面数量: " + quadFaceCount as string + "面"
+                edtModelInfo.text = "名���: " + selectedObj.name + "\r\n材质ID数量: " + materialCount as string + "个\r\n四边面数量: " + quadFaceCount as string + "面"
             )
         )
     )
@@ -576,7 +585,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         local elapsedTime = (endTime - startTime) / 1000.0
 
         local logMessage = "------------------------ \r\n"
-        logMessage += "转换为标准材质完成\r\n"
+        logMessage += "转换标准材质完成\r\n"
         logMessage += "总材质数: " + totalCount as string + "\r\n"
         logMessage += "转换材质数: " + convertedCount as string + "\r\n"
         logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
