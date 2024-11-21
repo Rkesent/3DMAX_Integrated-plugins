@@ -4,6 +4,226 @@
 -- 全局变量
 global missingMaps = #()
 
+-- 添加必要的辅助函数
+-- 获取材质的贴图名称
+fn _getMapName _material = (
+    try (
+        _mapName = ""
+        -- 检查材质是否为空
+        if _material == undefined then return ""
+        
+        -- 检查diffuseMap
+        if _material.diffuseMap != undefined then (
+            if _material.diffuseMap.fileName != undefined then (
+                _fileName = _material.diffuseMap.fileName
+                _arr = filterString _fileName "\\"
+                _mapName = (FilterString _arr[_arr.count] ".")[1]
+                return _mapName
+            )
+        )
+        
+        -- 检查specularMap
+        if _material.specularMap != undefined then (
+            if _material.specularMap.fileName != undefined then (
+                _fileName = _material.specularMap.fileName
+                _arr = filterString _fileName "\\"
+                _mapName = (FilterString _arr[_arr.count] ".")[1]
+            )
+        )
+        return _mapName
+    )
+    catch (
+        -- 发生错误时返回空字符串
+        return ""
+    )
+)
+
+-- 设置材质的名称和贴图名称
+fn _setMaterialName _material = (
+    try (
+        -- 检查材质是否为空
+        if _material == undefined then return false
+        
+        if(classof _material == MultiMaterial) then (
+            matList = _material.MaterialList
+            if matList != undefined and matList.count > 0 then (
+                for m in matList where m != undefined do (
+                    _setMaterialName m
+                )
+                _mapName = _getMapName matList[1]
+                if _mapName != "" then (
+                    _mapName = substring _mapName 2 -1
+                    _material.name = "MATM" + _mapName
+                )
+            )
+        )
+        else (
+            _mapName = _getMapName _material
+            if(_mapName != "") then (
+                _material.name = "MA" + _mapName
+                if(_material.diffuseMap != undefined) then (
+                    try(_material.diffuseMap.name = _mapName) catch()
+                )
+                if(_material.specularMap != undefined) then (
+                    try(_material.specularMap.name = _mapName) catch()
+                )
+            )
+            else (
+                _material.name = "MAT"
+            )
+        )
+        return true
+    )
+    catch (
+        format "Error in _setMaterialName: %\n" (getCurrentException())
+        return false
+    )
+)
+
+-- 根据材质id获取面
+fn _getFaceIDByMaterialID g id = (
+    faceIDArr = #()
+    allFace = polyOp.getNumFaces g
+    for i = 1 to allFace do (
+        faceMatID = polyOp.getFaceMatID g i
+        if(faceMatID == id) then (
+            append faceIDArr i
+        )
+    )
+    return faceIDArr
+)
+
+-- 根据贴图名称查询材质数组中是否已经包含该贴图
+fn getIndexByMapName matArr mapName = (
+    index = 0
+    for m = 1 to matArr.count do (
+        _mapName = _getMapName matArr[m]
+        if(mapName == _mapName) then (
+            index = m
+            exit
+        )
+    )
+    return index
+)
+
+-- 根据diffuse颜色查询索引
+fn getIndexByDiffuse matArr _color = (
+    index = 0
+    for m = 1 to matArr.count do (
+        color2 = matArr[m].Diffuse
+        if(_color == color2) then (
+            index = m
+            exit
+        )
+    )
+    return index
+)
+
+-- 根据名称查询材质数组中是否已经包含该贴图的部分名称
+fn includeByName matArr _name = (
+    index = 0
+    for m = 1 to matArr.count do (
+        _mapName = _getMapName matArr[m]
+        flog = findString _mapName _name
+        if(flog != undefined) then (
+            index = m
+            exit
+        )
+    )
+    return index
+)
+
+-- 将多维数组展开成一维
+fn unfoldArr oldArr = (
+    newArr = #()
+    for i in oldArr do (
+        if(classof i == Array) then (
+            arr = unfoldArr i
+            for j in arr do (
+                append newArr j
+            )
+        )
+        else (
+            append newArr i
+        )
+    )
+    return newArr
+)
+
+-- 优化材质
+fn optimaizeMat geo = (
+    mat = geo.material
+    matIdList = mat.materialIDList
+    matList = mat.materialList
+    materialArr = #()
+    faceArr = #()
+    
+    for index = 1 to matIdList.count do (
+        matId = matIdList[index]
+        mat = matList[index]
+        face = _getFaceIDByMaterialID geo matId
+        
+        if(face.count == 0) then continue
+        
+        _mapName = _getMapName mat
+        index = getIndexByMapName materialArr _mapName
+        
+        if(index == 0) then (
+            index_gaojing = includeByName materialArr "高精贴片"
+            isInclude = findString (_getMapName mat) "高精贴片"
+            
+            if(index_gaojing == 0 and isInclude != undefined) then (
+                insertItem mat materialArr 1
+                insertItem face faceArr 1
+            )
+            else (
+                append materialArr mat
+                append faceArr face
+            )
+        )
+        else (
+            if(_mapName == "") then (
+                color1 = mat.Diffuse
+                __index = getIndexByDiffuse materialArr color1
+                if(__index != 0) then (
+                    append faceArr[__index] face
+                )
+                else (
+                    append materialArr mat
+                    append faceArr face
+                )
+            )
+            else (
+                append faceArr[index] face
+            )
+        )
+    )
+    
+    -- 重新设置新的材质
+    geo.material = Multimaterial numsubs:materialArr.count
+    for index = 1 to faceArr.count do (
+        faceArr[index] = unfoldArr faceArr[index]
+        geo.material[index] = materialArr[index]
+        polyOp.setFaceMatID geo faceArr[index] index
+    )
+)
+
+-- 显示材质
+fn displayMat = (
+    for me = 1 to meditMaterials.count do (
+        meditMaterials[me] = Standardmaterial()
+    )
+    matArr = #()
+    for g in selection do (
+        if((findItem matArr g.material) == 0) then (
+            append matArr g.material
+        )
+    )
+    for m = 1 to matArr.count do (
+        meditMaterials[m] = matArr[m]
+    )
+)
+
 -- 自定义函数：检查数组中是否存在某个元素
 fn arrayContains arr item =
 (
@@ -38,9 +258,10 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     
     -- 新增按钮
     button btnConvertToStandard "转化为标准材质" pos:[10,370] width:100 height:20
-    button btnConvertToVR "转化为VR材质" pos:[10,390] width:100 height:20
+    button btnConvertToVR "转�����VR材质" pos:[10,390] width:100 height:20
     button btnRename "重命名" pos:[120,370] width:100 height:40
     button btnCheckModelID "模型ID数检查" pos:[230,370] width:100 height:40
+    button btn_namemat "贴图命名材质" width:100 height:40 pos:[340,320]
 
     -- 添加函数声明
     fn insertLog message =
@@ -113,7 +334,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         local col4 = lvModels.Columns.Add "丢失贴图名称" 100
         local col5 = lvModels.Columns.Add "错误信息" 100
         
-        -- 设置列表总宽度以避免出现空列
+        -- 设置列总宽度以避免出空列
         lvModels.width = 400  -- 调整总宽度为所有列宽之和
     )
 
@@ -229,8 +450,8 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         )
         logMessage += "------------------------ \r\n"
         logMessage += "总模型数: " + totalModels as string + "个\r\n总贴图数: " + totalMaps as string + "张\r\n"
-        logMessage += "丢失��型数: " + missingModelsCount as string + "个\r\n丢失贴图数: " + missingMapsCount as string + "张\r\n"
-        logMessage += "检查\r\n耗时: " + elapsedTime as string + " 秒\r\n"
+        logMessage += "丢失型数: " + missingModelsCount as string + "个\r\n丢失贴图数: " + missingMapsCount as string + "张\r\n"
+        logMessage += "检查\r\n耗: " + elapsedTime as string + " 秒\r\n"
         logMessage += "###########$$$########## \r\n"
 
         insertLog logMessage
@@ -265,7 +486,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                     triFaceCount = selectedObj.numFaces
                 )
 
-                edtModelInfo.text = "名���: " + selectedObj.name + "\r\n材质ID数量: " + materialCount as string + "个\r\n四边面数量: " + quadFaceCount as string + "面"
+                edtModelInfo.text = "名: " + selectedObj.name + "\r\n材质ID数量: " + materialCount as string + "个\r\n四边面数量: " + quadFaceCount as string + "面"
             )
         )
     )
@@ -446,7 +667,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
             -- 确保所有变量都有值
             local logMessage = "------------------------ \r\n"
             logMessage += "处理完成\r\n"
-            logMessage += "更新贴图数量: " + (processedCount as string) + "\r\n"
+            logMessage += "更新贴图数: " + (processedCount as string) + "\r\n"
             logMessage += "耗时: " + (elapsedTime as string) + " 秒\r\n"
             logMessage += "------------------------ \r\n"
             logMessage += missingFilesLog -- 确保 missingFilesLog 有值
@@ -456,8 +677,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         )
     )
     -- 递归函数，用于转换材质
-    fn copyCommonProperties sourceMtl targetMtl =
-    (
+    fn copyCommonProperties sourceMtl targetMtl = (
         targetMtl.name = sourceMtl.name
         
         -- 处理 diffuse 颜色
@@ -501,10 +721,8 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         -- 可以根据需要添加更多通用属性的复制
     )
 
-    fn convertMaterial mtl targetType =
-    (
-        try
-        (
+    fn convertMaterial mtl targetType = (
+        try (
             case classof mtl of
             (
                 StandardMaterial: (
@@ -550,21 +768,18 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                 default: mtl
             )
         )
-        catch
-        (
+        catch (
             print ("Error converting material: " + (getCurrentException()))
             mtl -- 返回原始材质，如果转失败
         )
     )
     -- 清除日志按钮点击事件
-    on btnClearLog pressed do
-    (
+    on btnClearLog pressed do (
         edtLog.Clear()
     )
 
     -- 转化为标准材质按钮点击事件
-    on btnConvertToStandard pressed do
-    (
+    on btnConvertToStandard pressed do (
         local startTime = timestamp()
         local totalCount = scenematerials.count
         local convertedCount = 0
@@ -595,8 +810,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     )
 
     -- 转化为VR材质按钮点击事件
-    on btnConvertToVR pressed do
-    (
+    on btnConvertToVR pressed do (
         local startTime = timestamp()
         local totalCount = scenematerials.count
         local convertedCount = 0
@@ -691,37 +905,31 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         button useTextureBtn "将贴图名称作为材质名称" pos:[420,150] width:120 height:40
 
         -- 重命名按钮事件
-        on renameBtn pressed do
-        (
+        on renameBtn pressed do (
             -- 暂时只显示消息，具体重命名功能后续实现
             messageBox "重命名功能将在后续版本中实现" title:"提示"
             DestroyDialog renameRollout
         )
 
         -- 使用贴图名称按钮事件
-        on useTextureBtn pressed do
-        (
+        on useTextureBtn pressed do (
             -- 暂时只显示消息，具体功能后续实现
             messageBox "使用贴图名称功能将在后续版本中实现" title:"提示"
         )
     )
 
     -- 修改主界面中重命名按钮的事件处理程序
-    on btnRename pressed do
-    (
-        try
-        (
+    on btnRename pressed do (
+        try (
             -- 直接创建重命名弹窗，不检查选中状态
             createDialog renameRollout modal:true
         )
-        catch
-        (
+        catch (
             messageBox ("创建重命名窗口时发生错误：" + (getCurrentException())) title:"错误"
         )
     )
 
-    on btnCheckModelID pressed do
-    (
+    on btnCheckModelID pressed do (
         local startTime = timestamp()
         
         -- 清空列表
@@ -767,7 +975,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                         else if materialCount > faceCount then
                             errorMsg = "材质ID数量过多"
                         else if materialCount < faceCount then
-                            errorMsg = "材质ID数量未超过"
+                            errorMsg = "材ID数量未超过"
                     )
                     else
                     (
@@ -827,29 +1035,128 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     )
 
     -- 初始化
-    on replaceMissingMapsRollout open do
-    (
-        try
-        (
+    on replaceMissingMapsRollout open do (
+        try (
             initListView()
             initLogTextBox()
             initModelInfoTextBox()
             initIDLimitComboBox()
         )
-        catch
-        (
+        catch (
             messageBox ("初始化界面时发生错误：" + (getCurrentException())) title:"错误"
         )
+    )
+
+    -- 在 replaceMissingMapsRollout rollout 中添加 setMaterial 函数
+    fn setMaterial = (
+        local startTime = timestamp()
+        local processedCount = 0
+        local errorCount = 0
+        local emptyMatCount = 0
+        
+        -- 清空列表
+        lvModels.Items.Clear()
+        
+        for item in selection do (
+            if item.material != undefined then (
+                if (classof item.material == Multimaterial) then (
+                    try (
+                        local hasEmptyMat = false
+                        -- 检查多重材质中是否有空材质
+                        for i = 1 to item.material.numsubs do (
+                            if item.material[i] == undefined then (
+                                -- 添加到列表中
+                                local listItem = dotNetObject "System.Windows.Forms.ListViewItem" item.name
+                                listItem.SubItems.Add "多重材质"
+                                listItem.SubItems.Add (i as string)
+                                listItem.SubItems.Add ""
+                                listItem.SubItems.Add "材质ID " + i as string + " 为空"
+                                listItem.ForeColor = (dotNetClass "System.Drawing.Color").Red
+                                lvModels.Items.Add listItem
+                                
+                                hasEmptyMat = true
+                                emptyMatCount += 1
+                            )
+                        )
+                        
+                        -- 如果没有空材质，则进行命名
+                        if not hasEmptyMat then (
+                            -- 优化材质
+                            optimaizeMat item
+                            if(_setMaterialName item.material) then (
+                                item.material.name = "MAT_" + substring item.name 4 item.name.count
+                                processedCount += 1
+                            )
+                            else (
+                                errorCount += 1
+                            )
+                        )
+                    ) catch (
+                        errorCount += 1
+                        format "Error processing multimaterial: %\n" (getCurrentException())
+                    )
+                )
+                else (
+                    if(_setMaterialName item.material) then (
+                        processedCount += 1
+                    )
+                    else (
+                        errorCount += 1
+                    )
+                )
+            )
+            else (
+                -- 添加无材质的物体到列表
+                local listItem = dotNetObject "System.Windows.Forms.ListViewItem" item.name
+                listItem.SubItems.Add "无材质"
+                listItem.SubItems.Add "0"
+                listItem.SubItems.Add ""
+                listItem.SubItems.Add "物体无材质"
+                listItem.ForeColor = (dotNetClass "System.Drawing.Color").Red
+                lvModels.Items.Add listItem
+                emptyMatCount += 1
+            )
+        )
+        
+        try(displayMat()) catch()
+        
+        local endTime = timestamp()
+        local elapsedTime = (endTime - startTime) / 1000.0
+        
+        -- 生成日志信息
+        local logMessage = "------------------------ \r\n"
+        logMessage += "材质命名完成\r\n"
+        logMessage += "成功处理材质数: " + processedCount as string + "\r\n"
+        if errorCount > 0 then (
+            logMessage += "处理失败数: " + errorCount as string + "\r\n"
+        )
+        if emptyMatCount > 0 then (
+            logMessage += "空材质/无材质数: " + emptyMatCount as string + "\r\n"
+        )
+        logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
+        logMessage += "------------------------ \r\n"
+        
+        -- 更新日志
+        insertLog logMessage
+    )
+
+    -- 修改贴图命名材质按钮的事件处理程序
+    on btn_namemat pressed do (
+        if selection.count == 0 then
+        (
+            messageBox "请先选择要处理的模型！" title:"提示"
+            return undefined
+        )
+        
+        setMaterial()
     )
 )
 
 -- 显示UI
-try
-(
+try (
     createDialog replaceMissingMapsRollout width:640 height:420
 )
-catch
-(
+catch (
     messageBox ("创建UI时发生错误：" + (getCurrentException()))
 )
 
