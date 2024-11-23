@@ -258,10 +258,10 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     
     -- 新增按钮
     button btnConvertToStandard "转化为标准材质" pos:[10,370] width:100 height:20
-    button btnConvertToVR "转�����VR材质" pos:[10,390] width:100 height:20
+    button btnConvertToVR "转化为VR材质" pos:[10,390] width:100 height:20
     button btnRename "重命名" pos:[120,370] width:100 height:40
     button btnCheckModelID "模型ID数检查" pos:[230,370] width:100 height:40
-    button btn_namemat "贴图命名材质" width:100 height:40 pos:[340,320]
+    -- button btn_namemat "贴图命名材质" width:100 height:40 pos:[340,320]
 
     -- 添加函数声明
     fn insertLog message =
@@ -331,7 +331,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         local col1 = lvModels.Columns.Add "模型名称" 100
         local col2 = lvModels.Columns.Add "材质" 100
         local col3 = lvModels.Columns.Add "ID" 50
-        local col4 = lvModels.Columns.Add "丢失贴图名称" 100
+        local col4 = lvModels.Columns.Add "丢失贴图名称" 120
         local col5 = lvModels.Columns.Add "错误信息" 100
         
         -- 设置列总宽度以避免出空列
@@ -339,51 +339,93 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     )
 
     -- 检查缺少的文件
-    fn checkMissingFiles =
-    (
-        local startTime = timestamp()
-        missingMaps = #()
-        local totalModels = geometry.count
-        local totalMaps = 0
-        local missingModelsCount = 0
-        local missingMapsCount = 0
-        local uniqueMissingMaps = #()
-        local uniqueMissingModels = #()
+    fn checkMissingFiles = (
+        try (
+            local startTime = timestamp()
+            -- 清理之前的数组
+            if missingMaps != undefined do (
+                missingMaps = #()
+                gc light:true
+            )
+            
+            -- 清理ListView
+            if lvModels != undefined do (
+                lvModels.Items.Clear()
+                -- 使用 BeginUpdate 替代 SuspendLayout
+                lvModels.BeginUpdate()
+            )
+            
+            local totalModels = geometry.count
+            local totalMaps = 0
+            local missingModelsCount = 0
+            local missingMapsCount = 0
+            local uniqueMissingMaps = #()
+            local uniqueMissingModels = #()
 
-        for obj in geometry where obj.material != undefined do
-        (
-            local mat = obj.material
-            if classof mat == Multimaterial then
-            (
-                for i = 1 to mat.numsubs do
-                (
-                    local subMat = mat[i]
-                    if subMat != undefined then
-                    (
-                        local diffuseMap = case classof subMat of
-                        (
-                            StandardMaterial: subMat.diffuseMap
-                            VRayMtl: subMat.texmap_diffuse
-                            PhysicalMaterial: subMat.base_color_map
+            -- 使用for循环替代for...in以优化性能
+            for i = 1 to geometry.count do (
+                local obj = geometry[i]
+                if obj.material != undefined do (
+                    local mat = obj.material
+                    if classof mat == Multimaterial then (
+                        for i = 1 to mat.numsubs do (
+                            local subMat = mat[i]
+                            if subMat != undefined then (
+                                local diffuseMap = case classof subMat of (
+                                    StandardMaterial: subMat.diffuseMap
+                                    VRayMtl: subMat.texmap_diffuse
+                                    PhysicalMaterial: subMat.base_color_map
+                                    default: undefined
+                                )
+                                
+                                if diffuseMap != undefined then (
+                                    totalMaps += 1
+                                    local fileName = diffuseMap.filename
+                                    if fileName != "" and not doesFileExist fileName then (
+                                        local fileBaseName = getFilenameFile fileName
+                                        local fileExtension = getFilenameType fileName
+                                        append missingMaps #(obj.name, subMat.name, i, fileBaseName + fileExtension)
+                                        
+                                        -- 优化数组查找
+                                        local mapKey = fileBaseName + fileExtension
+                                        if findItem uniqueMissingMaps mapKey == 0 do (
+                                            append uniqueMissingMaps mapKey
+                                            missingMapsCount += 1
+                                        )
+                                        
+                                        if findItem uniqueMissingModels obj.name == 0 do (
+                                            append uniqueMissingModels obj.name
+                                            missingModelsCount += 1
+                                        )
+                                    )
+                                )
+                            )
+                        )
+                    )
+                    else (
+                        local diffuseMap = case classof mat of (
+                            StandardMaterial: mat.diffuseMap
+                            VRayMtl: mat.texmap_diffuse
+                            PhysicalMaterial: mat.base_color_map
                             default: undefined
                         )
                         
-                        if diffuseMap != undefined then
-                        (
+                        if diffuseMap != undefined then (
                             totalMaps += 1
                             local fileName = diffuseMap.filename
-                            if fileName != "" and not doesFileExist fileName then
-                            (
+                            if fileName != "" and not doesFileExist fileName then (
                                 local fileBaseName = getFilenameFile fileName
                                 local fileExtension = getFilenameType fileName
-                                append missingMaps #(obj.name, subMat.name, i, fileBaseName + fileExtension)
-                                if not (arrayContains uniqueMissingMaps (fileBaseName + fileExtension)) then
-                                (
-                                    append uniqueMissingMaps (fileBaseName + fileExtension)
+                                append missingMaps #(obj.name, mat.name, 1, fileBaseName + fileExtension)
+                                
+                                -- 优化数组查找
+                                local mapKey = fileBaseName + fileExtension
+                                if findItem uniqueMissingMaps mapKey == 0 do (
+                                    append uniqueMissingMaps mapKey
                                     missingMapsCount += 1
                                 )
-                                if not (arrayContains uniqueMissingModels obj.name) then
-                                (
+                                
+                                if findItem uniqueMissingModels obj.name == 0 do (
                                     append uniqueMissingModels obj.name
                                     missingModelsCount += 1
                                 )
@@ -392,69 +434,54 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                     )
                 )
             )
-            else
-            (
-                local diffuseMap = case classof mat of
-                (
-                    StandardMaterial: mat.diffuseMap
-                    VRayMtl: mat.texmap_diffuse
-                    PhysicalMaterial: mat.base_color_map
-                    default: undefined
+
+            -- 批量更新UI
+            if lvModels != undefined do (
+                local items = dotNetObject "System.Windows.Forms.ListViewItem[]" missingMaps.count
+                for i = 1 to missingMaps.count do (
+                    local map = missingMaps[i]
+                    local item = dotNetObject "System.Windows.Forms.ListViewItem" map[1]
+                    item.SubItems.Add map[2]
+                    item.SubItems.Add (map[3] as string)
+                    item.SubItems.Add map[4]
+                    item.SubItems.Add "贴图丢失"
+                    items[i-1] = item
                 )
-                
-                if diffuseMap != undefined then
-                (
-                    totalMaps += 1
-                    local fileName = diffuseMap.filename
-                    if fileName != "" and not doesFileExist fileName then
-                    (
-                        local fileBaseName = getFilenameFile fileName
-                        local fileExtension = getFilenameType fileName
-                        append missingMaps #(obj.name, mat.name, 1, fileBaseName + fileExtension)
-                        if not (arrayContains uniqueMissingMaps (fileBaseName + fileExtension)) then
-                        (
-                            append uniqueMissingMaps (fileBaseName + fileExtension)
-                            missingMapsCount += 1
-                        )
-                        if not (arrayContains uniqueMissingModels obj.name) then
-                        (
-                            append uniqueMissingModels obj.name
-                            missingModelsCount += 1
-                        )
-                    )
-                )
+                lvModels.Items.AddRange items
+                -- 使用 EndUpdate 替代 ResumeLayout
+                lvModels.EndUpdate()
             )
+
+            local endTime = timestamp()
+            local elapsedTime = (endTime - startTime) / 1000.0
+
+            -- 生成日志信息
+            local logMessage = stringStream ""
+            format "------------------------ \r\n" to:logMessage
+            if missingMaps.count == 0 then (
+                format "未找到丢失的贴图。\r\n" to:logMessage
+            )
+            format "总模型数: %个\r\n总贴图数: %张\r\n" totalModels totalMaps to:logMessage
+            format "丢失模型数: %个\r\n丢失贴图数: %张\r\n" missingModelsCount missingMapsCount to:logMessage
+            format "检查耗时: % 秒\r\n" elapsedTime to:logMessage
+            format "###########$$$########## \r\n" to:logMessage
+
+            insertLog (logMessage as string)
+            
+            -- 清理临时变量
+            free logMessage
+            uniqueMissingMaps = undefined
+            uniqueMissingModels = undefined
+            gc light:true
         )
-
-        -- 更新UI
-        lvModels.Items.Clear()
-        for map in missingMaps do
-        (
-            local item = dotNetObject "System.Windows.Forms.ListViewItem" map[1]
-            item.SubItems.Add map[2]
-            item.SubItems.Add (map[3] as string)
-            item.SubItems.Add map[4]
-            local errorMsg = "贴图丢失"
-            item.SubItems.Add errorMsg
-            lvModels.Items.Add item
+        catch (
+            messageBox ("检查贴图时发生错误：" + (getCurrentException())) title:"错误"
+            -- 确保发生错误时也能释放资源
+            if lvModels != undefined do (
+                lvModels.EndUpdate()
+            )
+            gc light:true
         )
-
-        local endTime = timestamp()
-        local elapsedTime = (endTime - startTime) / 1000.0
-
-        local logMessage = ""
-        if missingMaps.count == 0 then
-        (
-            logMessage += "------------------------ \r\n"
-            logMessage += "未找到丢失的贴图。\r\n"
-        )
-        logMessage += "------------------------ \r\n"
-        logMessage += "总模型数: " + totalModels as string + "个\r\n总贴图数: " + totalMaps as string + "张\r\n"
-        logMessage += "丢失型数: " + missingModelsCount as string + "个\r\n丢失贴图数: " + missingMapsCount as string + "张\r\n"
-        logMessage += "检查\r\n耗: " + elapsedTime as string + " 秒\r\n"
-        logMessage += "###########$$$########## \r\n"
-
-        insertLog logMessage
     )
 
     -- 列表项点击事件
@@ -673,7 +700,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
             logMessage += missingFilesLog -- 确保 missingFilesLog 有值
             insertLog logMessage
 
-            messageBox "请等待3秒路径更新中。/n (点击确认后开始执行)"
+            messageBox "请等待3秒路径更新中。(点击确认后开始执行)"
         )
     )
     -- 递归函数，用于转换材质
@@ -913,8 +940,112 @@ rollout replaceMissingMapsRollout "快速贴图替换"
 
         -- 使用贴图名称按钮事件
         on useTextureBtn pressed do (
-            -- 暂时只显示消息，具体功能后续实现
-            messageBox "使用贴图名称功能将在后续版本中实现" title:"提示"
+            try (
+                local startTime = timestamp()
+                local processedCount = 0
+                local errorCount = 0
+                local emptyMatCount = 0
+                
+                -- 获取当前选中的对象
+                local selObjects = selection as array
+                if selObjects.count == 0 then (
+                    messageBox "请先选择要处理的模型！" title:"提示"
+                    return undefined
+                )
+                
+                -- 清空主窗口的列表
+                if replaceMissingMapsRollout.lvModels != undefined do (
+                    replaceMissingMapsRollout.lvModels.Items.Clear()
+                )
+                
+                for item in selObjects do (
+                    if item.material != undefined then (
+                        if (classof item.material == Multimaterial) then (
+                            try (
+                                local hasEmptyMat = false
+                                -- 检查多重材质中是否有空材质
+                                for i = 1 to item.material.numsubs do (
+                                    if item.material[i] == undefined then (
+                                        -- 添加到列表中
+                                        local listItem = dotNetObject "System.Windows.Forms.ListViewItem" item.name
+                                        listItem.SubItems.Add "多重材质"
+                                        listItem.SubItems.Add (i as string)
+                                        listItem.SubItems.Add ""
+                                        listItem.SubItems.Add "材质ID " + i as string + " 为空"
+                                        listItem.ForeColor = (dotNetClass "System.Drawing.Color").Red
+                                        replaceMissingMapsRollout.lvModels.Items.Add listItem
+                                        
+                                        hasEmptyMat = true
+                                        emptyMatCount += 1
+                                    )
+                                )
+                                
+                                -- 如果没有空材质，则进行命名
+                                if not hasEmptyMat then (
+                                    -- 优化材质
+                                    optimaizeMat item
+                                    if(_setMaterialName item.material) then (
+                                        item.material.name = "MAT_" + substring item.name 4 item.name.count
+                                        processedCount += 1
+                                    )
+                                    else (
+                                        errorCount += 1
+                                    )
+                                )
+                            ) catch (
+                                errorCount += 1
+                                format "Error processing multimaterial: %\n" (getCurrentException())
+                            )
+                        )
+                        else (
+                            if(_setMaterialName item.material) then (
+                                processedCount += 1
+                            )
+                            else (
+                                errorCount += 1
+                            )
+                        )
+                    )
+                    else (
+                        -- 添加无材质的物体到列表
+                        local listItem = dotNetObject "System.Windows.Forms.ListViewItem" item.name
+                        listItem.SubItems.Add "无材质"
+                        listItem.SubItems.Add "0"
+                        listItem.SubItems.Add ""
+                        listItem.SubItems.Add "物体无材质"
+                        listItem.ForeColor = (dotNetClass "System.Drawing.Color").Red
+                        replaceMissingMapsRollout.lvModels.Items.Add listItem
+                        emptyMatCount += 1
+                    )
+                )
+                
+                try(displayMat()) catch()
+                
+                local endTime = timestamp()
+                local elapsedTime = (endTime - startTime) / 1000.0
+                
+                -- 生成日志信息
+                local logMessage = "------------------------ \r\n"
+                logMessage += "材质命名完成\r\n"
+                logMessage += "成功处理材质数: " + processedCount as string + "\r\n"
+                if errorCount > 0 then (
+                    logMessage += "处理失败数: " + errorCount as string + "\r\n"
+                )
+                if emptyMatCount > 0 then (
+                    logMessage += "空材质/无材质数: " + emptyMatCount as string + "\r\n"
+                )
+                logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
+                logMessage += "------------------------ \r\n"
+                
+                -- 更新日志
+                replaceMissingMapsRollout.insertLog logMessage
+                
+                -- 关闭重命名工具窗口
+                DestroyDialog renameRollout
+            )
+            catch (
+                messageBox ("处理材质命名时发生错误：" + (getCurrentException())) title:"错误"
+            )
         )
     )
 
@@ -930,107 +1061,122 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     )
 
     on btnCheckModelID pressed do (
-        local startTime = timestamp()
-        
-        -- 清空列表
-        lvModels.Items.Clear()
-        
-        -- 获取选中的ID限制值
-        if cmbIDLimit.SelectedItem != undefined then
-        (
-            local idLimit = cmbIDLimit.SelectedItem as integer
-            -- 统计变量
-            local totalModels = 0
-            local totalMaterials = 0
-            local abnormalModels = 0
-            local overLimitModels = 0
+        try (
+            local startTime = timestamp()
             
-            -- 遍历所有几何体
-            for obj in geometry do
-            (
-                totalModels += 1
-                local materialCount = 0
-                local faceCount = 0
-                local errorMsg = ""
-                
-                -- 获取面数
-                if isKindOf obj Editable_Poly then
-                    faceCount = polyOp.getNumFaces obj
-                else if isKindOf obj Editable_Mesh then
-                    faceCount = obj.numFaces
-                    
-                -- 检材质
-                if obj.material != undefined then
-                (
-                    if classof obj.material == MultiMaterial then
-                    (
-                        materialCount = obj.material.numsubs
-                        -- 检查材质ID是否超出限制
-                        if materialCount > idLimit then
-                        (
-                            errorMsg = "超出ID限制"
-                            overLimitModels += 1
-                        )
-                        -- 检查材质ID是否超出面数
-                        else if materialCount > faceCount then
-                            errorMsg = "材质ID数量过多"
-                        else if materialCount < faceCount then
-                            errorMsg = "材ID数量未超过"
-                    )
-                    else
-                    (
-                        materialCount = 1
-                    )
-                    
-                    totalMaterials += materialCount
-                )
-                else
-                (
-                    materialCount = 0
-                    errorMsg = "无材质"
-                )
-                
-                -- 如果有错误信息，则认为是异常模型
-                if errorMsg != "" then
-                    abnormalModels += 1
-                    
-                -- 添加到列表中
-                local item = dotNetObject "System.Windows.Forms.ListViewItem" obj.name
-                item.SubItems.Add (if obj.material != undefined then obj.material.name else "无材质")
-                item.SubItems.Add (materialCount as string) -- ID数量列
-                item.SubItems.Add "" -- 丢失贴图列保持为空
-                item.SubItems.Add errorMsg
-                
-                -- 修改这部分：设置项目颜色
-                if materialCount > idLimit then
-                    item.ForeColor = (dotNetClass "System.Drawing.Color").Red
-                else
-                    item.ForeColor = (dotNetClass "System.Drawing.Color").Black -- 改为黑色
-                
-                lvModels.Items.Add item
+            -- 清空列表并暂停更新
+            if lvModels != undefined do (
+                lvModels.Items.Clear()
+                lvModels.BeginUpdate()
             )
             
-            local endTime = timestamp()
-            local elapsedTime = (endTime - startTime) / 1000.0
-            
-            -- 生成日志信息
-            local logMessage = "------------------------ \r\n"
-            logMessage += "模型ID检查完成\r\n"
-            logMessage += "总模型数量: " + totalModels as string + "\r\n"
-            logMessage += "总材质ID数: " + totalMaterials as string + "\r\n"
-            logMessage += "异常模型数: " + abnormalModels as string + "\r\n"
-            logMessage += "超出限制模型数: " + overLimitModels as string + "\r\n"
-            logMessage += "ID限制: " + idLimit as string + "\r\n"
-            logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
-            logMessage += "------------------------ \r\n"
-            
-            -- 更新日志
-            insertLog logMessage
+            if cmbIDLimit.SelectedItem != undefined then (
+                local idLimit = cmbIDLimit.SelectedItem as integer
+                local totalModels = 0
+                local totalMaterials = 0
+                local abnormalModels = 0
+                local overLimitModels = 0
+                
+                -- 创建临时数组存储列表项
+                local items = #()
+                
+                -- 遍历几何体
+                for obj in geometry do (
+                    totalModels += 1
+                    local materialCount = 0
+                    local faceCount = 0
+                    local errorMsg = ""
+                    
+                    -- 获取面数
+                    if isKindOf obj Editable_Poly then
+                        faceCount = polyOp.getNumFaces obj
+                    else if isKindOf obj Editable_Mesh then
+                        faceCount = obj.numFaces
+                        
+                    -- 检查材质
+                    if obj.material != undefined then (
+                        if classof obj.material == MultiMaterial then (
+                            materialCount = obj.material.numsubs
+                            if materialCount > idLimit then (
+                                errorMsg = "超出ID限制"
+                                overLimitModels += 1
+                            )
+                            else if materialCount > faceCount then
+                                errorMsg = "材质ID数量过多"
+                            else if materialCount < faceCount then
+                                errorMsg = "材ID数量未超过"
+                        )
+                        else
+                            materialCount = 1
+                        
+                        totalMaterials += materialCount
+                    )
+                    else (
+                        materialCount = 0
+                        errorMsg = "无材质"
+                    )
+                    
+                    if errorMsg != "" then
+                        abnormalModels += 1
+                    
+                    -- 创建列表项
+                    local item = dotNetObject "System.Windows.Forms.ListViewItem" obj.name
+                    item.SubItems.Add (if obj.material != undefined then obj.material.name else "无材质")
+                    item.SubItems.Add (materialCount as string)
+                    item.SubItems.Add ""
+                    item.SubItems.Add errorMsg
+                    
+                    if materialCount > idLimit then
+                        item.ForeColor = (dotNetClass "System.Drawing.Color").Red
+                    else
+                        item.ForeColor = (dotNetClass "System.Drawing.Color").Black
+                    
+                    append items item
+                )
+                
+                -- 批量添加列表项
+                local itemsArray = dotNetObject "System.Windows.Forms.ListViewItem[]" items.count
+                for i = 1 to items.count do (
+                    itemsArray[i-1] = items[i]
+                )
+                lvModels.Items.AddRange itemsArray
+                
+                -- 恢复ListView更新
+                lvModels.EndUpdate()
+                
+                local endTime = timestamp()
+                local elapsedTime = (endTime - startTime) / 1000.0
+                
+                -- 生成日志信息
+                local logMessage = stringStream ""
+                format "------------------------ \r\n" to:logMessage
+                format "模型ID检查完成\r\n" to:logMessage
+                format "总模型数量: %\r\n" totalModels to:logMessage
+                format "总材质ID数: %\r\n" totalMaterials to:logMessage
+                format "异常模型数: %\r\n" abnormalModels to:logMessage
+                format "超出限制模型数: %\r\n" overLimitModels to:logMessage
+                format "ID限制: %\r\n" idLimit to:logMessage
+                format "耗时: % 秒\r\n" elapsedTime to:logMessage
+                format "------------------------ \r\n" to:logMessage
+                
+                insertLog (logMessage as string)
+                
+                -- 清理资源
+                free logMessage
+                items = undefined
+                gc light:true
+            )
+            else (
+                messageBox "请先选择ID限制值！" title:"提示"
+            )
         )
-        else
-        (
-            messageBox "请先选择ID限制值！" title:"提示"
-            return undefined
+        catch (
+            messageBox ("检查模型ID时发生错误：" + (getCurrentException())) title:"错误"
+            -- 确保发生错误时也能释放资源
+            if lvModels != undefined do (
+                lvModels.EndUpdate()
+            )
+            gc light:true
         )
     )
 
