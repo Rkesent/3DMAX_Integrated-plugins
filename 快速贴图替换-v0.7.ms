@@ -3,6 +3,7 @@
 
 -- 全局变量
 global missingMaps = #()
+global isProcessing = false
 
 -- 添加必要的辅助函数
 -- 获取材质的贴图名称
@@ -230,6 +231,19 @@ fn arrayContains arr item =
     local found = false
     for i in arr where i == item do found = true
     found
+)
+
+-- 添加按钮状态管理函数
+fn disableButton btn = (
+    if btn != undefined do (
+        btn.enabled = false
+    )
+)
+
+fn enableButton btn = (
+    if btn != undefined do (
+        btn.enabled = true
+    )
 )
 
 -- 创建UI
@@ -529,14 +543,21 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     )
 
     -- 检查按钮点击事件
-    on btnCheck pressed do
-    (
-        checkMissingFiles()
+    on btnCheck pressed do (
+        if isProcessing do return()
+        isProcessing = true
+        disableButton btnCheck
+        try (
+            checkMissingFiles()
+        ) catch (
+            messageBox ("检查贴图时发生错误：" + (getCurrentException())) title:"错误"
+        )
+        isProcessing = false
+        enableButton btnCheck
     )
 
     -- 替换按钮点击事件
-    on btnReplace pressed do
-    (
+    on btnReplace pressed do (
         -- 先执行检查
         checkMissingFiles()
         
@@ -611,8 +632,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     )
 
     -- 更换贴图路径按钮点击事件
-    on btnChangePath pressed do
-    (
+    on btnChangePath pressed do (
         -- 先执行检查
         checkMissingFiles()
         
@@ -663,6 +683,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                                 PhysicalMaterial: subMat.base_color_map
                                 default: undefined
                             )
+                            
                             if diffuseMap != undefined then
                             (
                                 diffuseMap.filename = newFilePath
@@ -807,69 +828,108 @@ rollout replaceMissingMapsRollout "快速贴图替换"
 
     -- 转化为标准材质按钮点击事件
     on btnConvertToStandard pressed do (
-        local startTime = timestamp()
-        local totalCount = scenematerials.count
-        local convertedCount = 0
+        if isProcessing do return()
+        isProcessing = true
+        disableButton btnConvertToStandard
+        try (
+            local startTime = timestamp()
+            local totalCount = scenematerials.count
+            local convertedCount = 0
 
-        -- 遍历景中的所有材质
-        for i = 1 to totalCount do
-        (
-            local oldMat = scenematerials[i]
-            local newMat = convertMaterial oldMat StandardMaterial
-            if newMat != oldMat then
+            -- 遍历景中的所有材质
+            for i = 1 to totalCount do
             (
-                replaceInstances oldMat newMat
-                convertedCount += 1
+                local oldMat = scenematerials[i]
+                local newMat = convertMaterial oldMat StandardMaterial
+                if newMat != oldMat then
+                (
+                    replaceInstances oldMat newMat
+                    convertedCount += 1
+                )
             )
+
+            local endTime = timestamp()
+            local elapsedTime = (endTime - startTime) / 1000.0
+
+            local logMessage = "------------------------ \r\n"
+            logMessage += "转换标准材质完成\r\n"
+            logMessage += "总材质数: " + totalCount as string + "\r\n"
+            logMessage += "转换材质数: " + convertedCount as string + "\r\n"
+            logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
+            logMessage += "<<暂时请勿操作:请等待2秒>>\r\n"
+            logMessage += "------------------------ \r\n"
+            insertLog logMessage
+        ) catch (
+            messageBox ("转换材质时发生错误：" + (getCurrentException())) title:"错误"
         )
-
-        local endTime = timestamp()
-        local elapsedTime = (endTime - startTime) / 1000.0
-
-        local logMessage = "------------------------ \r\n"
-        logMessage += "转换标准材质完成\r\n"
-        logMessage += "总材质数: " + totalCount as string + "\r\n"
-        logMessage += "转换材质数: " + convertedCount as string + "\r\n"
-        logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
-        logMessage += "<<暂时请勿操作:请等待2秒>>\r\n"
-        logMessage += "------------------------ \r\n"
-        insertLog logMessage
+        isProcessing = false
+        enableButton btnConvertToStandard
     )
 
     -- 转化为VR材质按钮点击事件
     on btnConvertToVR pressed do (
-        local startTime = timestamp()
-        local totalCount = scenematerials.count
-        local convertedCount = 0
+        if isProcessing do return()
+        isProcessing = true
+        disableButton btnConvertToVR
+        try (
+            local startTime = timestamp()
+            local totalCount = scenematerials.count
+            local convertedCount = 0
 
-        -- 遍历场景中的所有材质
-        for i = 1 to totalCount do
-        (
-            local oldMat = scenematerials[i]
-            local newMat = convertMaterial oldMat VRayMtl
-            if newMat != oldMat then
+            -- 遍历场景中的所有材质
+            for i = 1 to totalCount do
             (
-                replaceInstances oldMat newMat
-                convertedCount += 1
+                local oldMat = scenematerials[i]
+                local newMat = convertMaterial oldMat VRayMtl
+                if newMat != oldMat then
+                (
+                    replaceInstances oldMat newMat
+                    convertedCount += 1
+                )
             )
+
+            local endTime = timestamp()
+            local elapsedTime = (endTime - startTime) / 1000.0
+
+            local logMessage = "------------------------ \r\n"
+            logMessage += "转换为VR材质完成\r\n"
+            logMessage += "总材质数: " + totalCount as string + "\r\n"
+            logMessage += "转换材质数: " + convertedCount as string + "\r\n"
+            logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
+            logMessage += "<<暂时请勿操作:请等待2秒>>\r\n"
+            logMessage += "------------------------ \r\n"
+            insertLog logMessage
+        ) catch (
+            messageBox ("转换材质时发生错误：" + (getCurrentException())) title:"错误"
         )
-
-        local endTime = timestamp()
-        local elapsedTime = (endTime - startTime) / 1000.0
-
-        local logMessage = "------------------------ \r\n"
-        logMessage += "转换为VR材质完成\r\n"
-        logMessage += "总材质数: " + totalCount as string + "\r\n"
-        logMessage += "转换材质数: " + convertedCount as string + "\r\n"
-        logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
-        logMessage += "<<暂时请勿操作:请等待2秒>>\r\n"
-        logMessage += "------------------------ \r\n"
-        insertLog logMessage
+        isProcessing = false
+        enableButton btnConvertToVR
     )
 
     -- 添加重命名弹窗rollout
     rollout renameRollout "重命名工具" width:550 height:250
     (
+        local closeTimer = undefined
+        
+        -- 添加计时器创建函数
+        fn createCloseTimer = (
+            if closeTimer != undefined then (
+                try(closeTimer.Dispose())catch()
+            )
+            closeTimer = dotNetObject "System.Windows.Forms.Timer"
+            closeTimer.Interval = 1000 -- 1秒
+            closeTimer.Tick += dotNetObject "System.EventHandler" closeTimer (
+                fn timerCallback sender args = (
+                    try(
+                        sender.Stop()
+                        destroyDialog renameRollout
+                        sender.Dispose()
+                    )catch()
+                )
+            )
+            closeTimer
+        )
+
         local labelColor = (color 180 180 180) -- 标签文字颜色
 
         -- 模型命名组
@@ -897,7 +957,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         radioButtons rad1 "" pos:[20,80] width:150 height:20 labels:#("选择", "全部") columns:2
         label fill1 "填充位:" pos:[300,80] width:40 height:20 textColor:labelColor
         spinner fillNum1 "" pos:[340,80] width:40 height:30 range:[0,10,3] type:#integer scale:1
-        checkbox chk_enableRename "启用模型命名" pos:[160,80] width:150 height:20 checked:false
+        checkbox chk_enableRename "启用模型命名" pos:[160,80] width:90 height:20
         
         -- 贴图命名组
         GroupBox grp2 "贴图命名" pos:[10,120] width:400 height:100    
@@ -923,7 +983,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         radioButtons rad2 "" pos:[20,190] width:150 height:20 labels:#("选择", "全部") columns:2
         label fill2 "填充位:" pos:[300,190] width:40 height:20 textColor:labelColor
         spinner fillNum2 "" pos:[340,190] width:40 height:30 range:[0,10,3] type:#integer scale:1
-        checkbox chk_enableTextureRename "启用贴图命名" pos:[160,190] width:150 height:20 checked:false
+        checkbox chk_enableTextureRename "启用贴图命名" pos:[160,190] width:90 height:20 checked:false
         
         -- 右侧预览区域
         GroupBox previewGrp "命名预览" pos:[420,10] width:120 height:90
@@ -932,7 +992,55 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         -- 底部按钮
         button renameBtn "重命名" pos:[420,110] width:120 height:30
         button useTextureBtn "将贴图名称作为材质名称" pos:[420,150] width:120 height:40
+        checkBox chkArchive "将贴图归档" pos:[440,200] width:80 height:20
 
+        -- 添加预览更新事件
+        fn updatePreview = (
+            try (
+                local previewText = ""
+                -- 如果启用了模型命名，显示模型命名预览
+                if chk_enableRename.checked then (
+                    previewText = base1.text + "_" + city1.text + "_" + proj1.text + "_" + abbr1.text
+                    if fillNum1.value > 0 then (
+                        previewText += "_" + (padNumber 0 fillNum1.value "")
+                    )
+                )
+                -- 如果启用了贴图命名，显示贴图命名预览
+                if chk_enableTextureRename.checked then (
+                    if previewText != "" then previewText += "\n"
+                    previewText += base2.text + "_" + city2.text + "_" + proj2.text + "_" + abbr2.text
+                    if fillNum2.value > 0 then (
+                        previewText += "_" + (padNumber 0 fillNum2.value "")
+                    )
+                )
+                preview.text = previewText
+            ) catch (
+                format "更新预览出错: %\n" (getCurrentException())
+            )
+        )
+
+        -- 添加文本框变化事件
+        on base1 changed text do updatePreview()
+        on city1 changed text do updatePreview()
+        on proj1 changed text do updatePreview()
+        on abbr1 changed text do updatePreview()
+        on fillNum1 changed val do updatePreview()
+        
+        on base2 changed text do updatePreview()
+        on city2 changed text do updatePreview()
+        on proj2 changed text do updatePreview()
+        on abbr2 changed text do updatePreview()
+        on fillNum2 changed val do updatePreview()
+        
+        -- 添加复选框变化事件
+        on chk_enableRename changed state do updatePreview()
+        on chk_enableTextureRename changed state do updatePreview()
+        
+        -- 初始化事件
+        on renameRollout open do (
+            updatePreview()
+        )
+        
         -- 重命名按钮事件
         on renameBtn pressed do (
             try (
@@ -1033,24 +1141,22 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                                 return undefined
                             )
                         ) else (
-                            -- 全部模式：处理所有未隐藏的几何体
+                            -- 全部模式：处理��有未隐藏的几何体
                             for obj in geometry where not obj.isHidden do (
                                 append objsToProcess obj
                             )
                         )
                         
-                        -- 用于记录已处理的贴图，避免重复处理
-                        local processedMaps = #()
+                        -- 用于记录贴图路径映射关系
+                        local mapPathMapping = #()
                         
-                        -- 开始重命名贴图
+                        -- 第一次遍历：收集所有需要重命名的贴图路径
                         for obj in objsToProcess do (
                             if obj.material != undefined then (
                                 if classof obj.material == MultiMaterial then (
-                                    -- 处理多重材质
                                     for i = 1 to obj.material.numsubs do (
                                         local subMat = obj.material[i]
                                         if subMat != undefined then (
-                                            -- 获取diffuse贴图
                                             local diffuseMap = case classof subMat of (
                                                 StandardMaterial: subMat.diffuseMap
                                                 VRayMtl: subMat.texmap_diffuse
@@ -1059,35 +1165,26 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                                             )
                                             
                                             if diffuseMap != undefined and diffuseMap.filename != undefined then (
-                                                -- 检查是否已处理过该贴图
-                                                if findItem processedMaps diffuseMap.filename == 0 then (
-                                                    local oldPath = diffuseMap.filename
+                                                local oldPath = diffuseMap.filename
+                                                if findItem (for m in mapPathMapping collect m[1]) oldPath == 0 then (
                                                     local dir = getFilenamePath oldPath
                                                     local ext = getFilenameType oldPath
                                                     
                                                     -- 生成新的贴图名称
-                                                    local numStr = (startNum + processedCount) as string
+                                                    local numStr = (startNum + mapPathMapping.count) as string
                                                     while numStr.count < fillCount do
                                                         numStr = "0" + numStr
                                                     
                                                     local newName = baseCode + cityName + projName + abbrName + numStr
                                                     local newPath = dir + newName + ext
                                                     
-                                                    -- 重命名文件
-                                                    if doesFileExist oldPath then (
-                                                        try (
-                                                            renameFile oldPath newPath
-                                                            diffuseMap.filename = newPath
-                                                            append processedMaps oldPath
-                                                            processedCount += 1
-                                                        ) catch ()
-                                                    )
+                                                    -- 添加到映射关系中
+                                                    append mapPathMapping #(oldPath, newPath)
                                                 )
                                             )
                                         )
                                     )
                                 ) else (
-                                    -- 处理单一材质
                                     local diffuseMap = case classof obj.material of (
                                         StandardMaterial: obj.material.diffuseMap
                                         VRayMtl: obj.material.texmap_diffuse
@@ -1096,30 +1193,75 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                                     )
                                     
                                     if diffuseMap != undefined and diffuseMap.filename != undefined then (
-                                        if findItem processedMaps diffuseMap.filename == 0 then (
-                                            local oldPath = diffuseMap.filename
+                                        local oldPath = diffuseMap.filename
+                                        if findItem (for m in mapPathMapping collect m[1]) oldPath == 0 then (
                                             local dir = getFilenamePath oldPath
                                             local ext = getFilenameType oldPath
                                             
                                             -- 生成新的贴图名称
-                                            local numStr = (startNum + processedCount) as string
+                                            local numStr = (startNum + mapPathMapping.count) as string
                                             while numStr.count < fillCount do
                                                 numStr = "0" + numStr
                                             
                                             local newName = baseCode + cityName + projName + abbrName + numStr
                                             local newPath = dir + newName + ext
                                             
-                                            -- 重命名文件
-                                            if doesFileExist oldPath then (
-                                                try (
-                                                    renameFile oldPath newPath
+                                            -- 添加到映射关系中
+                                            append mapPathMapping #(oldPath, newPath)
+                                        )
+                                    )
+                                )
+                            )
+                        )
+                        
+                        -- 第二次遍历：执行重命名并更新材质
+                        for mapping in mapPathMapping do (
+                            local oldPath = mapping[1]
+                            local newPath = mapping[2]
+                            
+                            -- 重命名文件
+                            if doesFileExist oldPath then (
+                                try (
+                                    -- 先重命名文件
+                                    renameFile oldPath newPath
+                                    
+                                    -- 更新所有使用该贴图的材质
+                                    for obj in objsToProcess do (
+                                        if obj.material != undefined then (
+                                            if classof obj.material == MultiMaterial then (
+                                                for i = 1 to obj.material.numsubs do (
+                                                    local subMat = obj.material[i]
+                                                    if subMat != undefined then (
+                                                        local diffuseMap = case classof subMat of (
+                                                            StandardMaterial: subMat.diffuseMap
+                                                            VRayMtl: subMat.texmap_diffuse
+                                                            PhysicalMaterial: subMat.base_color_map
+                                                            default: undefined
+                                                        )
+                                                        
+                                                        if diffuseMap != undefined and diffuseMap.filename == oldPath then (
+                                                            diffuseMap.filename = newPath
+                                                        )
+                                                    )
+                                                )
+                                            ) else (
+                                                local diffuseMap = case classof obj.material of (
+                                                    StandardMaterial: obj.material.diffuseMap
+                                                    VRayMtl: obj.material.texmap_diffuse
+                                                    PhysicalMaterial: obj.material.base_color_map
+                                                    default: undefined
+                                                )
+                                                
+                                                if diffuseMap != undefined and diffuseMap.filename == oldPath then (
                                                     diffuseMap.filename = newPath
-                                                    append processedMaps oldPath
-                                                    processedCount += 1
-                                                ) catch ()
+                                                )
                                             )
                                         )
                                     )
+                                    
+                                    processedCount += 1
+                                ) catch (
+                                    format "Error renaming file % to %: %\n" oldPath newPath (getCurrentException())
                                 )
                             )
                         )
@@ -1153,9 +1295,12 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                 
                 -- 成功执行后关闭窗口
                 if hasValidOperation then (
-                    -- 如果操作成功，延迟关闭窗口，让用户有时间看到结果
-                    local closeTime = timestamp() + 1000 -- 1秒后关闭
-                    callbacks.addTimer closeTime 1 "try(destroyDialog renameRollout)catch()"
+                    try(
+                        local timer = createCloseTimer()
+                        timer.Start()
+                    )catch(
+                        try(destroyDialog renameRollout)catch()
+                    )
                 )
             )
             catch (
@@ -1265,12 +1410,61 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                 -- 更新日志
                 replaceMissingMapsRollout.insertLog logMessage
                 
-                -- 关闭重命名工具窗口
-                DestroyDialog renameRollout
+                -- 使用计时器关闭窗口
+                try(
+                    local timer = createCloseTimer()
+                    timer.Start()
+                )catch(
+                    try(destroyDialog renameRollout)catch()
+                )
             )
             catch (
                 messageBox ("处理材质命名时发生错误：" + (getCurrentException())) title:"错误"
             )
+        )
+
+        -- 在 renameRollout 中添加关闭事件处理
+        on renameRollout close do (
+            try(
+                if closeTimer != undefined then (
+                    closeTimer.Stop()
+                    closeTimer.Dispose()
+                    closeTimer = undefined
+                )
+                gc light:true
+            )catch()
+        )
+    )
+
+    -- 添加贴图归档函数
+    fn archiveMapFile sourceFile = (
+        try (
+            -- 获取当前场景文件路径
+            local scenePath = maxFilePath
+            if scenePath == "" then (
+                messageBox "请先保存场景文件！" title:"提示"
+                return false
+            )
+            
+            -- 创建maps文夹
+            local mapsDir = pathConfig.appendPath scenePath "maps"
+            makeDir mapsDir
+            
+            -- 获取源文件名
+            local fileName = filenameFromPath sourceFile
+            
+            -- 构建目标文件路径
+            local targetFile = pathConfig.appendPath mapsDir fileName
+            
+            -- 复制文件
+            if doesFileExist sourceFile then (
+                copyFile sourceFile targetFile
+                return true
+            )
+            return false
+        ) catch (
+            format "归档贴图出错: %\n" (getCurrentException())
+            return false
         )
     )
 
@@ -1286,6 +1480,9 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     )
 
     on btnCheckModelID pressed do (
+        if isProcessing do return()
+        isProcessing = true
+        disableButton btnCheckModelID
         try (
             local startTime = timestamp()
             
@@ -1376,11 +1573,9 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                 local logMessage = stringStream ""
                 format "------------------------ \r\n" to:logMessage
                 format "模型ID检查完成\r\n" to:logMessage
-                format "总模型数量: %\r\n" totalModels to:logMessage
-                format "总材质ID数: %\r\n" totalMaterials to:logMessage
-                format "异常模型数: %\r\n" abnormalModels to:logMessage
-                format "超出限制模型数: %\r\n" overLimitModels to:logMessage
-                format "ID限制: %\r\n" idLimit to:logMessage
+                format "总模型数量: %个\r\n总材质ID数: %个\r\n" totalModels totalMaterials to:logMessage
+                format "异常模型数: %个\r\n超出限制模型数: %个\r\n" abnormalModels overLimitModels to:logMessage
+                format "ID限制: %个\r\n" idLimit to:logMessage
                 format "耗时: % 秒\r\n" elapsedTime to:logMessage
                 format "------------------------ \r\n" to:logMessage
                 
@@ -1394,8 +1589,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
             else (
                 messageBox "请先选择ID限制值！" title:"提示"
             )
-        )
-        catch (
+        ) catch (
             messageBox ("检查模型ID时发生错误：" + (getCurrentException())) title:"错误"
             -- 确保发生错误时也能释放资源
             if lvModels != undefined do (
@@ -1403,6 +1597,8 @@ rollout replaceMissingMapsRollout "快速贴图替换"
             )
             gc light:true
         )
+        isProcessing = false
+        enableButton btnCheckModelID
     )
 
     -- 初始化
@@ -1530,4 +1726,3 @@ try (
 catch (
     messageBox ("创建UI时发生错误：" + (getCurrentException()))
 )
-
