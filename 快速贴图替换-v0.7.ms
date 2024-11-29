@@ -258,7 +258,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     
     -- 新增按钮
     button btnConvertToStandard "转化为标准材质" pos:[10,370] width:100 height:20
-    button btnConvertToVR "转化为VR材质" pos:[10,390] width:100 height:20
+    button btnConvertToVR "转化VR材质" pos:[10,390] width:100 height:20
     button btnRename "重命名" pos:[120,370] width:100 height:40
     button btnCheckModelID "模型ID数检查" pos:[230,370] width:100 height:40
     -- button btn_namemat "贴图命名材质" width:100 height:40 pos:[340,320]
@@ -887,16 +887,17 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         label lbl5 "起始位" pos:[340,35] width:40 height:20 textColor:labelColor
         
         -- 模型命名输入框行
-        editText base1 "" pos:[20,55] width:60 height:20
-        editText city1 "" pos:[100,55] width:60 height:20
-        editText proj1 "" pos:[180,55] width:60 height:20
-        editText abbr1 "" pos:[260,55] width:60 height:20
+        editText base1 "" pos:[20,55] width:60 height:20 text:"SM" align:#center
+        editText city1 "" pos:[100,55] width:60 height:20 align:#center
+        editText proj1 "" pos:[180,55] width:60 height:20 align:#center
+        editText abbr1 "" pos:[260,55] width:60 height:20 align:#center
         spinner start1 "" pos:[340,55] width:40 height:30 range:[0,999,1] type:#integer scale:1
         
         -- 选择和填充位
         radioButtons rad1 "" pos:[20,80] width:150 height:20 labels:#("选择", "全部") columns:2
         label fill1 "填充位:" pos:[300,80] width:40 height:20 textColor:labelColor
         spinner fillNum1 "" pos:[340,80] width:40 height:30 range:[0,10,3] type:#integer scale:1
+        checkbox chk_enableRename "启用模型命名" pos:[160,80] width:150 height:20 checked:false
         
         -- 贴图命名组
         GroupBox grp2 "贴图命名" pos:[10,120] width:400 height:100    
@@ -912,16 +913,17 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         label lbl10 "起始位" pos:[340,145] width:40 height:20 textColor:labelColor
         
         -- 贴图命名输入框行
-        editText base2 "" pos:[20,165] width:60 height:20
-        editText city2 "" pos:[100,165] width:60 height:20
-        editText proj2 "" pos:[180,165] width:60 height:20
-        editText abbr2 "" pos:[260,165] width:60 height:20
+        editText base2 "" pos:[20,165] width:60 height:20 text:"T" align:#center
+        editText city2 "" pos:[100,165] width:60 height:20 align:#center
+        editText proj2 "" pos:[180,165] width:60 height:20 align:#center
+        editText abbr2 "" pos:[260,165] width:60 height:20 align:#center
         spinner start2 "" pos:[340,165] width:40 height:30 range:[0,999,1] type:#integer scale:1
         
         -- 选择和填充位
         radioButtons rad2 "" pos:[20,190] width:150 height:20 labels:#("选择", "全部") columns:2
         label fill2 "填充位:" pos:[300,190] width:40 height:20 textColor:labelColor
         spinner fillNum2 "" pos:[340,190] width:40 height:30 range:[0,10,3] type:#integer scale:1
+        checkbox chk_enableTextureRename "启用贴图命名" pos:[160,190] width:150 height:20 checked:false
         
         -- 右侧预览区域
         GroupBox previewGrp "命名预览" pos:[420,10] width:120 height:90
@@ -934,66 +936,227 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         -- 重命名按钮事件
         on renameBtn pressed do (
             try (
-                local startTime = timestamp()
-                local processedCount = 0
+                local hasValidOperation = false
                 
-                -- 获取输入值
-                local baseCode = base1.text + "_"
-                local cityName = city1.text + "_"
-                local projName = proj1.text + "_"
-                local abbrName = abbr1.text + "_"
-                local startNum = start1.value
-                local fillCount = fillNum1.value
-                
-                -- 获取要处理的对象数组
-                local objsToProcess = #()
-                if rad1.state == 1 then (
-                    -- 选择模式：只处理选中的对象
-                    objsToProcess = selection as array
-                    if objsToProcess.count == 0 then (
-                        messageBox "请先选择要重命名的对象！" title:"提示"
+                -- 检查模型重命名功能
+                if chk_enableRename.checked then (
+                    -- 检查必填字段是否为空
+                    if base1.text != "" and city1.text != "" and proj1.text != "" and abbr1.text != "" then (
+                        hasValidOperation = true
+                        local startTime = timestamp()
+                        local processedCount = 0
+                        
+                        -- 获取输入值
+                        local baseCode = base1.text + "_"
+                        local cityName = city1.text + "_"
+                        local projName = proj1.text + "_"
+                        local abbrName = abbr1.text + "_"
+                        local startNum = start1.value
+                        local fillCount = fillNum1.value
+                        
+                        -- 获取要处理的对象数组
+                        local objsToProcess = #()
+                        if rad1.state == 1 then (
+                            -- 选择模式：只处理选中的对象
+                            objsToProcess = selection as array
+                            if objsToProcess.count == 0 then (
+                                messageBox "请先选择要重命名的对象！" title:"提示"
+                                return undefined
+                            )
+                        ) else (
+                            -- 全部模式：处理所有未隐藏的几何体
+                            for obj in geometry where not obj.isHidden do (
+                                append objsToProcess obj
+                            )
+                        )
+                        
+                        -- 开始重命名
+                        for i = 1 to objsToProcess.count do (
+                            local obj = objsToProcess[i]
+                            local numStr = (startNum + i - 1) as string
+                            -- 填充序号到指定位数
+                            while numStr.count < fillCount do
+                                numStr = "0" + numStr
+                            
+                            -- 组合新名称
+                            local newName = baseCode + cityName + projName + abbrName + numStr
+                            
+                            -- 重命名对象
+                            obj.name = newName
+                            processedCount += 1
+                        )
+                        
+                        local endTime = timestamp()
+                        local elapsedTime = (endTime - startTime) / 1000.0
+                        
+                        -- 生成日志信息
+                        local logMessage = "------------------------ \r\n"
+                        logMessage += "模型重命名完成\r\n"
+                        logMessage += "处理模型数: " + processedCount as string + "\r\n"
+                        logMessage += "起始序号: " + startNum as string + "\r\n"
+                        logMessage += "填充位数: " + fillCount as string + "\r\n"
+                        logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
+                        logMessage += "------------------------ \r\n"
+                        
+                        -- 更新日志
+                        replaceMissingMapsRollout.insertLog logMessage
+                    )
+                    else (
+                        messageBox "请填写所有模型命名相关的字段！" title:"提示"
                         return undefined
                     )
-                ) else (
-                    -- 全部模式：处理所有未隐藏的几何体
-                    for obj in geometry where not obj.isHidden do (
-                        append objsToProcess obj
+                )
+                
+                -- 检查贴图重命名功能
+                if chk_enableTextureRename.checked then (
+                    -- 检查必填字段是否为空
+                    if base2.text != "" and city2.text != "" and proj2.text != "" and abbr2.text != "" then (
+                        hasValidOperation = true
+                        local startTime = timestamp()
+                        local processedCount = 0
+                        
+                        -- 获取输入值
+                        local baseCode = base2.text + "_"
+                        local cityName = city2.text + "_"
+                        local projName = proj2.text + "_"
+                        local abbrName = abbr2.text + "_"
+                        local startNum = start2.value
+                        local fillCount = fillNum2.value
+                        
+                        -- 获取要处理的对象数组
+                        local objsToProcess = #()
+                        if rad2.state == 1 then (
+                            -- 选择模式：只处理选中的对象
+                            objsToProcess = selection as array
+                            if objsToProcess.count == 0 then (
+                                messageBox "请先选择要处理的对象！" title:"提示"
+                                return undefined
+                            )
+                        ) else (
+                            -- 全部模式：处理所有未隐藏的几何体
+                            for obj in geometry where not obj.isHidden do (
+                                append objsToProcess obj
+                            )
+                        )
+                        
+                        -- 用于记录已处理的贴图，避免重复处理
+                        local processedMaps = #()
+                        
+                        -- 开始重命名贴图
+                        for obj in objsToProcess do (
+                            if obj.material != undefined then (
+                                if classof obj.material == MultiMaterial then (
+                                    -- 处理多重材质
+                                    for i = 1 to obj.material.numsubs do (
+                                        local subMat = obj.material[i]
+                                        if subMat != undefined then (
+                                            -- 获取diffuse贴图
+                                            local diffuseMap = case classof subMat of (
+                                                StandardMaterial: subMat.diffuseMap
+                                                VRayMtl: subMat.texmap_diffuse
+                                                PhysicalMaterial: subMat.base_color_map
+                                                default: undefined
+                                            )
+                                            
+                                            if diffuseMap != undefined and diffuseMap.filename != undefined then (
+                                                -- 检查是否已处理过该贴图
+                                                if findItem processedMaps diffuseMap.filename == 0 then (
+                                                    local oldPath = diffuseMap.filename
+                                                    local dir = getFilenamePath oldPath
+                                                    local ext = getFilenameType oldPath
+                                                    
+                                                    -- 生成新的贴图名称
+                                                    local numStr = (startNum + processedCount) as string
+                                                    while numStr.count < fillCount do
+                                                        numStr = "0" + numStr
+                                                    
+                                                    local newName = baseCode + cityName + projName + abbrName + numStr
+                                                    local newPath = dir + newName + ext
+                                                    
+                                                    -- 重命名文件
+                                                    if doesFileExist oldPath then (
+                                                        try (
+                                                            renameFile oldPath newPath
+                                                            diffuseMap.filename = newPath
+                                                            append processedMaps oldPath
+                                                            processedCount += 1
+                                                        ) catch ()
+                                                    )
+                                                )
+                                            )
+                                        )
+                                    )
+                                ) else (
+                                    -- 处理单一材质
+                                    local diffuseMap = case classof obj.material of (
+                                        StandardMaterial: obj.material.diffuseMap
+                                        VRayMtl: obj.material.texmap_diffuse
+                                        PhysicalMaterial: obj.material.base_color_map
+                                        default: undefined
+                                    )
+                                    
+                                    if diffuseMap != undefined and diffuseMap.filename != undefined then (
+                                        if findItem processedMaps diffuseMap.filename == 0 then (
+                                            local oldPath = diffuseMap.filename
+                                            local dir = getFilenamePath oldPath
+                                            local ext = getFilenameType oldPath
+                                            
+                                            -- 生成新的贴图名称
+                                            local numStr = (startNum + processedCount) as string
+                                            while numStr.count < fillCount do
+                                                numStr = "0" + numStr
+                                            
+                                            local newName = baseCode + cityName + projName + abbrName + numStr
+                                            local newPath = dir + newName + ext
+                                            
+                                            -- 重命名文件
+                                            if doesFileExist oldPath then (
+                                                try (
+                                                    renameFile oldPath newPath
+                                                    diffuseMap.filename = newPath
+                                                    append processedMaps oldPath
+                                                    processedCount += 1
+                                                ) catch ()
+                                            )
+                                        )
+                                    )
+                                )
+                            )
+                        )
+                        
+                        local endTime = timestamp()
+                        local elapsedTime = (endTime - startTime) / 1000.0
+                        
+                        -- 生成日志信息
+                        local logMessage = "------------------------ \r\n"
+                        logMessage += "贴图重命名完成\r\n"
+                        logMessage += "处理贴图数: " + processedCount as string + "\r\n"
+                        logMessage += "起始序号: " + startNum as string + "\r\n"
+                        logMessage += "填充位数: " + fillCount as string + "\r\n"
+                        logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
+                        logMessage += "------------------------ \r\n"
+                        
+                        -- 更新日志
+                        replaceMissingMapsRollout.insertLog logMessage
+                    )
+                    else (
+                        messageBox "请填写所有贴图命名相关的字段！" title:"提示"
+                        return undefined
                     )
                 )
                 
-                -- 开始重命名
-                for i = 1 to objsToProcess.count do (
-                    local obj = objsToProcess[i]
-                    local numStr = (startNum + i - 1) as string
-                    -- 填充序号到指定位数
-                    while numStr.count < fillCount do
-                        numStr = "0" + numStr
-                    
-                    -- 组合新名称
-                    local newName = baseCode + cityName + projName + abbrName + numStr
-                    
-                    -- 重命名对象
-                    obj.name = newName
-                    processedCount += 1
+                -- 如果两个功能都未启用，显示提示
+                if not hasValidOperation then (
+                    messageBox "请至少启用一个命名功能并填写相关字段！" title:"提示"
+                    return undefined
                 )
                 
-                local endTime = timestamp()
-                local elapsedTime = (endTime - startTime) / 1000.0
-                
-                -- 生成日志信息
-                local logMessage = "------------------------ \r\n"
-                logMessage += "模型重命名完成\r\n"
-                logMessage += "处理模型数: " + processedCount as string + "\r\n"
-                logMessage += "起始序号: " + startNum as string + "\r\n"
-                logMessage += "填充位数: " + fillCount as string + "\r\n"
-                logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
-                logMessage += "------------------------ \r\n"
-                
-                -- 更新日志
-                replaceMissingMapsRollout.insertLog logMessage
-                
-                -- 关闭重命名工具窗口
-                DestroyDialog renameRollout
+                -- 成功执行后关闭窗口
+                if hasValidOperation then (
+                    -- 如果操作成功，延迟关闭窗口，让用户有时间看到结果
+                    local closeTime = timestamp() + 1000 -- 1秒后关闭
+                    callbacks.addTimer closeTime 1 "try(destroyDialog renameRollout)catch()"
+                )
             )
             catch (
                 messageBox ("重命名过程中发生错误：" + (getCurrentException())) title:"错误"
@@ -1042,7 +1205,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                                     )
                                 )
                                 
-                                -- 如果没有空材质，则进行命名
+                                -- 如果没有材质，则进行命名
                                 if not hasEmptyMat then (
                                     -- 优化材质
                                     optimaizeMat item
@@ -1114,8 +1277,8 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     -- 修改主界面中重命名按钮的事件处理程序
     on btnRename pressed do (
         try (
-            -- 直接创建重命名弹窗，不检查选中状态
-            createDialog renameRollout modal:true
+            -- 创建非模态对话框
+            createDialog renameRollout modal:false
         )
         catch (
             messageBox ("创建重命名窗口时发生错误：" + (getCurrentException())) title:"错误"
