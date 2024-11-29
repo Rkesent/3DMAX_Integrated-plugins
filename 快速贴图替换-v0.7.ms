@@ -898,9 +898,9 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         label fill1 "填充位:" pos:[300,80] width:40 height:20 textColor:labelColor
         spinner fillNum1 "" pos:[340,80] width:40 height:30 range:[0,10,3] type:#integer scale:1
         
-        -- 材质命名组
-        GroupBox grp2 "材质命名" pos:[10,120] width:400 height:100    
-        -- 材质命名标签行
+        -- 贴图命名组
+        GroupBox grp2 "贴图命名" pos:[10,120] width:400 height:100    
+        -- 贴图命名标签行
         label lbl6 "基础代号" pos:[20,145] width:60 height:20 textColor:labelColor
         label plus5 "+" pos:[90,165] width:10 height:20 textColor:labelColor
         label lbl7 "城市名称" pos:[100,145] width:60 height:20 textColor:labelColor
@@ -911,7 +911,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         label plus8 "+" pos:[330,165] width:10 height:20 textColor:labelColor
         label lbl10 "起始位" pos:[340,145] width:40 height:20 textColor:labelColor
         
-        -- 材质命名输入框行
+        -- 贴图命名输入框行
         editText base2 "" pos:[20,165] width:60 height:20
         editText city2 "" pos:[100,165] width:60 height:20
         editText proj2 "" pos:[180,165] width:60 height:20
@@ -933,9 +933,71 @@ rollout replaceMissingMapsRollout "快速贴图替换"
 
         -- 重命名按钮事件
         on renameBtn pressed do (
-            -- 暂时只显示消息，具体重命名功能后续实现
-            messageBox "重命名功能将在后续版本中实现" title:"提示"
-            DestroyDialog renameRollout
+            try (
+                local startTime = timestamp()
+                local processedCount = 0
+                
+                -- 获取输入值
+                local baseCode = base1.text + "_"
+                local cityName = city1.text + "_"
+                local projName = proj1.text + "_"
+                local abbrName = abbr1.text + "_"
+                local startNum = start1.value
+                local fillCount = fillNum1.value
+                
+                -- 获取要处理的对象数组
+                local objsToProcess = #()
+                if rad1.state == 1 then (
+                    -- 选择模式：只处理选中的对象
+                    objsToProcess = selection as array
+                    if objsToProcess.count == 0 then (
+                        messageBox "请先选择要重命名的对象！" title:"提示"
+                        return undefined
+                    )
+                ) else (
+                    -- 全部模式：处理所有未隐藏的几何体
+                    for obj in geometry where not obj.isHidden do (
+                        append objsToProcess obj
+                    )
+                )
+                
+                -- 开始重命名
+                for i = 1 to objsToProcess.count do (
+                    local obj = objsToProcess[i]
+                    local numStr = (startNum + i - 1) as string
+                    -- 填充序号到指定位数
+                    while numStr.count < fillCount do
+                        numStr = "0" + numStr
+                    
+                    -- 组合新名称
+                    local newName = baseCode + cityName + projName + abbrName + numStr
+                    
+                    -- 重命名对象
+                    obj.name = newName
+                    processedCount += 1
+                )
+                
+                local endTime = timestamp()
+                local elapsedTime = (endTime - startTime) / 1000.0
+                
+                -- 生成日志信息
+                local logMessage = "------------------------ \r\n"
+                logMessage += "模型重命名完成\r\n"
+                logMessage += "处理模型数: " + processedCount as string + "\r\n"
+                logMessage += "起始序号: " + startNum as string + "\r\n"
+                logMessage += "填充位数: " + fillCount as string + "\r\n"
+                logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
+                logMessage += "------------------------ \r\n"
+                
+                -- 更新日志
+                replaceMissingMapsRollout.insertLog logMessage
+                
+                -- 关闭重命名工具窗口
+                DestroyDialog renameRollout
+            )
+            catch (
+                messageBox ("重命名过程中发生错误：" + (getCurrentException())) title:"错误"
+            )
         )
 
         -- 使用贴图名称按钮事件
