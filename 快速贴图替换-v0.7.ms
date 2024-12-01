@@ -724,7 +724,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
             messageBox "请等待3秒路径更新中。(点击确认后开始执行)"
         )
     )
-    -- 递归函数，用于转换材质
+    -- 递归函数，用于转材质
     fn copyCommonProperties sourceMtl targetMtl = (
         targetMtl.name = sourceMtl.name
         
@@ -860,7 +860,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
             logMessage += "------------------------ \r\n"
             insertLog logMessage
         ) catch (
-            messageBox ("转换材质时发生错误：" + (getCurrentException())) title:"错误"
+            messageBox ("转换��质时发生错误：" + (getCurrentException())) title:"错误"
         )
         isProcessing = false
         enableButton btnConvertToStandard
@@ -985,62 +985,11 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         spinner fillNum2 "" pos:[340,190] width:40 height:30 range:[0,10,3] type:#integer scale:1
         checkbox chk_enableTextureRename "启用贴图命名" pos:[160,190] width:90 height:20 checked:false
         
-        -- 右侧预览区域
-        GroupBox previewGrp "命名预览" pos:[420,10] width:120 height:90
-        editText preview "" pos:[430,30] width:100 height:60
-        
         -- 底部按钮
-        button renameBtn "重命名" pos:[420,110] width:120 height:30
-        button useTextureBtn "将贴图名称作为材质名称" pos:[420,150] width:120 height:40
-        checkBox chkArchive "将贴图归档" pos:[440,200] width:80 height:20
+        button renameBtn "重命名" pos:[420,15] width:120 height:30
+        button useTextureBtn "将贴图名称作为材质名称" pos:[420,50] width:120 height:40
+        checkBox chkArchive "将贴图归档" pos:[440,90] width:80 height:20
 
-        -- 添加预览更新事件
-        fn updatePreview = (
-            try (
-                local previewText = ""
-                -- 如果启用了模型命名，显示模型命名预览
-                if chk_enableRename.checked then (
-                    previewText = base1.text + "_" + city1.text + "_" + proj1.text + "_" + abbr1.text
-                    if fillNum1.value > 0 then (
-                        previewText += "_" + (padNumber 0 fillNum1.value "")
-                    )
-                )
-                -- 如果启用了贴图命名，显示贴图命名预览
-                if chk_enableTextureRename.checked then (
-                    if previewText != "" then previewText += "\n"
-                    previewText += base2.text + "_" + city2.text + "_" + proj2.text + "_" + abbr2.text
-                    if fillNum2.value > 0 then (
-                        previewText += "_" + (padNumber 0 fillNum2.value "")
-                    )
-                )
-                preview.text = previewText
-            ) catch (
-                format "更新预览出错: %\n" (getCurrentException())
-            )
-        )
-
-        -- 添加文本框变化事件
-        on base1 changed text do updatePreview()
-        on city1 changed text do updatePreview()
-        on proj1 changed text do updatePreview()
-        on abbr1 changed text do updatePreview()
-        on fillNum1 changed val do updatePreview()
-        
-        on base2 changed text do updatePreview()
-        on city2 changed text do updatePreview()
-        on proj2 changed text do updatePreview()
-        on abbr2 changed text do updatePreview()
-        on fillNum2 changed val do updatePreview()
-        
-        -- 添加复选框变化事件
-        on chk_enableRename changed state do updatePreview()
-        on chk_enableTextureRename changed state do updatePreview()
-        
-        -- 初始化事件
-        on renameRollout open do (
-            updatePreview()
-        )
-        
         -- 重命名按钮事件
         on renameBtn pressed do (
             try (
@@ -1054,25 +1003,23 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                         local startTime = timestamp()
                         local processedCount = 0
                         
-                        -- 获取输入值
-                        local baseCode = base1.text + "_"
-                        local cityName = city1.text + "_"
-                        local projName = proj1.text + "_"
-                        local abbrName = abbr1.text + "_"
-                        local startNum = start1.value
-                        local fillCount = fillNum1.value
+                        -- 获取输入值并确保它们都有效
+                        local baseCode = base1.text
+                        local cityName = city1.text
+                        local projName = proj1.text
+                        local abbrName = abbr1.text
+                        local startNum = try(start1.value as integer)catch(1)
+                        local fillCount = try(fillNum1.value as integer)catch(3)
                         
                         -- 获取要处理的对象数组
                         local objsToProcess = #()
                         if rad1.state == 1 then (
-                            -- 选择模式：只处理选中的对象
                             objsToProcess = selection as array
                             if objsToProcess.count == 0 then (
                                 messageBox "请先选择要重命名的对象！" title:"提示"
                                 return undefined
                             )
                         ) else (
-                            -- 全部模式：处理所有未隐藏的几何体
                             for obj in geometry where not obj.isHidden do (
                                 append objsToProcess obj
                             )
@@ -1080,18 +1027,22 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                         
                         -- 开始重命名
                         for i = 1 to objsToProcess.count do (
-                            local obj = objsToProcess[i]
-                            local numStr = (startNum + i - 1) as string
-                            -- 填充序号到指定位数
-                            while numStr.count < fillCount do
-                                numStr = "0" + numStr
-                            
-                            -- 组合新名称
-                            local newName = baseCode + cityName + projName + abbrName + numStr
-                            
-                            -- 重命名对象
-                            obj.name = newName
-                            processedCount += 1
+                            try (
+                                local obj = objsToProcess[i]
+                                -- 确保数字处理正确
+                                local currentNum = startNum + i - 1
+                                local numStr = padNumber currentNum fillCount "0"
+                                
+                                -- 组合新名称，确保每个部分都用下划线连接
+                                local newName = baseCode + "_" + cityName + "_" + projName + "_" + abbrName + "_" + numStr
+                                
+                                -- 重命名对象
+                                obj.name = newName
+                                processedCount += 1
+                            ) catch (
+                                format "处理对象 % 时出错: %\n" i (getCurrentException())
+                                continue
+                            )
                         )
                         
                         local endTime = timestamp()
@@ -1107,7 +1058,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                         logMessage += "------------------------ \r\n"
                         
                         -- 更新日志
-                        replaceMissingMapsRollout.insertLog logMessage
+                        insertLog logMessage
                     )
                     else (
                         messageBox "请填写所有模型命名相关的字段！" title:"提示"
@@ -1115,7 +1066,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                     )
                 )
                 
-                -- 检查贴图重命名功能
+                -- 贴图重命名功能
                 if chk_enableTextureRename.checked then (
                     -- 检查必填字段是否为空
                     if base2.text != "" and city2.text != "" and proj2.text != "" and abbr2.text != "" then (
@@ -1123,109 +1074,100 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                         local startTime = timestamp()
                         local processedCount = 0
                         
-                        -- 获取输入值
-                        local baseCode = base2.text + "_"
-                        local cityName = city2.text + "_"
-                        local projName = proj2.text + "_"
-                        local abbrName = abbr2.text + "_"
-                        local startNum = start2.value
-                        local fillCount = fillNum2.value
+                        -- 获取输入值并确保它们都有效
+                        local baseCode = base2.text
+                        local cityName = city2.text
+                        local projName = proj2.text
+                        local abbrName = abbr2.text
+                        local startNumber = try(start2.value as integer)catch(1)
+                        local fillWidth = try(fillNum2.value as integer)catch(3)
                         
                         -- 获取要处理的对象数组
                         local objsToProcess = #()
                         if rad2.state == 1 then (
-                            -- 选择模式：只处理选中的对象
                             objsToProcess = selection as array
                             if objsToProcess.count == 0 then (
                                 messageBox "请先选择要处理的对象！" title:"提示"
                                 return undefined
                             )
                         ) else (
-                            -- 全部模式：处理��有未隐藏的几何体
                             for obj in geometry where not obj.isHidden do (
                                 append objsToProcess obj
                             )
                         )
                         
-                        -- 用于记录贴图路径映射关系
-                        local mapPathMapping = #()
+                        -- 用于记录所有贴图的重命名映射
+                        local allRenameMappings = #()
+                        local currentNumber = startNumber
                         
-                        -- 第一次遍历：收集所有需要重命名的贴图路径
-                        for obj in objsToProcess do (
-                            if obj.material != undefined then (
-                                if classof obj.material == MultiMaterial then (
-                                    for i = 1 to obj.material.numsubs do (
-                                        local subMat = obj.material[i]
-                                        if subMat != undefined then (
-                                            local diffuseMap = case classof subMat of (
-                                                StandardMaterial: subMat.diffuseMap
-                                                VRayMtl: subMat.texmap_diffuse
-                                                PhysicalMaterial: subMat.base_color_map
+                        -- 第一步：如果勾选了归档选项，先执行归档操作
+                        if chkArchive.checked then (
+                            local mapPathMapping = archiveMapFiles objsToProcess
+                            if mapPathMapping.count == 0 then (
+                                messageBox "归档贴图失败，请确保场景已保存且贴图文件可访问！" title:"错误"
+                                return undefined
+                            )
+                            
+                            -- 第二步：更新场景中的贴图路径
+                            for mapping in mapPathMapping do (
+                                local oldPath = mapping[1]
+                                local newPath = mapping[2]
+                                
+                                -- 更新所有使用该贴图的材质
+                                for obj in objsToProcess do (
+                                    if obj.material != undefined then (
+                                        if classof obj.material == MultiMaterial then (
+                                            for i = 1 to obj.material.numsubs do (
+                                                local subMat = obj.material[i]
+                                                if subMat != undefined then (
+                                                    local diffuseMap = case classof subMat of (
+                                                        StandardMaterial: subMat.diffuseMap
+                                                        VRayMtl: subMat.texmap_diffuse
+                                                        PhysicalMaterial: subMat.base_color_map
+                                                        default: undefined
+                                                    )
+                                                    
+                                                    if diffuseMap != undefined and diffuseMap.filename == oldPath then (
+                                                        diffuseMap.filename = newPath
+                                                    )
+                                                )
+                                            )
+                                        ) else (
+                                            local diffuseMap = case classof obj.material of (
+                                                StandardMaterial: obj.material.diffuseMap
+                                                VRayMtl: obj.material.texmap_diffuse
+                                                PhysicalMaterial: obj.material.base_color_map
                                                 default: undefined
                                             )
                                             
-                                            if diffuseMap != undefined and diffuseMap.filename != undefined then (
-                                                local oldPath = diffuseMap.filename
-                                                if findItem (for m in mapPathMapping collect m[1]) oldPath == 0 then (
-                                                    local dir = getFilenamePath oldPath
-                                                    local ext = getFilenameType oldPath
-                                                    
-                                                    -- 生成新的贴图名称
-                                                    local numStr = (startNum + mapPathMapping.count) as string
-                                                    while numStr.count < fillCount do
-                                                        numStr = "0" + numStr
-                                                    
-                                                    local newName = baseCode + cityName + projName + abbrName + numStr
-                                                    local newPath = dir + newName + ext
-                                                    
-                                                    -- 添加到映射关系中
-                                                    append mapPathMapping #(oldPath, newPath)
-                                                )
+                                            if diffuseMap != undefined and diffuseMap.filename == oldPath then (
+                                                diffuseMap.filename = newPath
                                             )
-                                        )
-                                    )
-                                ) else (
-                                    local diffuseMap = case classof obj.material of (
-                                        StandardMaterial: obj.material.diffuseMap
-                                        VRayMtl: obj.material.texmap_diffuse
-                                        PhysicalMaterial: obj.material.base_color_map
-                                        default: undefined
-                                    )
-                                    
-                                    if diffuseMap != undefined and diffuseMap.filename != undefined then (
-                                        local oldPath = diffuseMap.filename
-                                        if findItem (for m in mapPathMapping collect m[1]) oldPath == 0 then (
-                                            local dir = getFilenamePath oldPath
-                                            local ext = getFilenameType oldPath
-                                            
-                                            -- 生成新的贴图名称
-                                            local numStr = (startNum + mapPathMapping.count) as string
-                                            while numStr.count < fillCount do
-                                                numStr = "0" + numStr
-                                            
-                                            local newName = baseCode + cityName + projName + abbrName + numStr
-                                            local newPath = dir + newName + ext
-                                            
-                                            -- 添加到映射关系中
-                                            append mapPathMapping #(oldPath, newPath)
                                         )
                                     )
                                 )
                             )
                         )
                         
-                        -- 第二次遍历：执行重命名并更新材质
-                        for mapping in mapPathMapping do (
-                            local oldPath = mapping[1]
-                            local newPath = mapping[2]
-                            
-                            -- 重命名文件
-                            if doesFileExist oldPath then (
-                                try (
-                                    -- 先重命名文件
+                        -- 第三步：收集所有需要重命名的贴图
+                        for obj in objsToProcess do (
+                            local result = processTextureRename obj currentNumber fillWidth baseCode cityName projName abbrName
+                            local objMappings = result[1]
+                            currentNumber = result[2]
+                            join allRenameMappings objMappings
+                        )
+                        
+                        -- 第四步：执行重命名操作
+                        for mapping in allRenameMappings do (
+                            try (
+                                local oldPath = mapping[1]
+                                local newPath = mapping[2]
+                                
+                                -- 重命名文件
+                                if doesFileExist oldPath then (
                                     renameFile oldPath newPath
                                     
-                                    -- 更新所有使用该贴图的材质
+                                    -- 更新所有使用该贴图的材质的路径
                                     for obj in objsToProcess do (
                                         if obj.material != undefined then (
                                             if classof obj.material == MultiMaterial then (
@@ -1260,9 +1202,10 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                                     )
                                     
                                     processedCount += 1
-                                ) catch (
-                                    format "Error renaming file % to %: %\n" oldPath newPath (getCurrentException())
                                 )
+                            ) catch (
+                                format "重命名文件时出错: %\n" (getCurrentException())
+                                continue
                             )
                         )
                         
@@ -1271,15 +1214,18 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                         
                         -- 生成日志信息
                         local logMessage = "------------------------ \r\n"
-                        logMessage += "贴图重命名完成\r\n"
-                        logMessage += "处理贴图数: " + processedCount as string + "\r\n"
-                        logMessage += "起始序号: " + startNum as string + "\r\n"
-                        logMessage += "填充位数: " + fillCount as string + "\r\n"
+                        logMessage += "贴图处理完成\r\n"
+                        if chkArchive.checked then (
+                            logMessage += "已归档贴图数: " + (if mapPathMapping != undefined then mapPathMapping.count else 0) as string + "\r\n"
+                        )
+                        logMessage += "重命名贴图数: " + processedCount as string + "\r\n"
+                        logMessage += "起始序号: " + startNumber as string + "\r\n"
+                        logMessage += "填充位数: " + fillWidth as string + "\r\n"
                         logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
                         logMessage += "------------------------ \r\n"
                         
                         -- 更新日志
-                        replaceMissingMapsRollout.insertLog logMessage
+                        insertLog logMessage
                     )
                     else (
                         messageBox "请填写所有贴图命名相关的字段！" title:"提示"
@@ -1408,7 +1354,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                 logMessage += "------------------------ \r\n"
                 
                 -- 更新日志
-                replaceMissingMapsRollout.insertLog logMessage
+                insertLog logMessage
                 
                 -- 使用计时器关闭窗口
                 try(
@@ -1725,4 +1671,177 @@ try (
 )
 catch (
     messageBox ("创建UI时发生错误：" + (getCurrentException()))
+)
+
+-- 在 archiveMapFile 函数后添加新的 archiveMapFiles 函数
+fn archiveMapFiles objsToProcess = (
+    try (
+        -- 获取当前场景文件路径
+        local scenePath = maxFilePath
+        if scenePath == "" then (
+            messageBox "请先保存场景文件！" title:"提示"
+            return #()
+        )
+        
+        -- 创建maps文件夹
+        local mapsDir = pathConfig.appendPath scenePath "maps"
+        makeDir mapsDir
+        
+        -- 用于存储贴图路径映射 (#(原路径, 新路径))
+        local mapPathMapping = #()
+        
+        -- 收集并复制所有贴图
+        for obj in objsToProcess do (
+            if obj.material != undefined then (
+                if classof obj.material == MultiMaterial then (
+                    for i = 1 to obj.material.numsubs do (
+                        local subMat = obj.material[i]
+                        if subMat != undefined then (
+                            local diffuseMap = case classof subMat of (
+                                StandardMaterial: subMat.diffuseMap
+                                VRayMtl: subMat.texmap_diffuse
+                                PhysicalMaterial: subMat.base_color_map
+                                default: undefined
+                            )
+                            
+                            if diffuseMap != undefined and diffuseMap.filename != undefined then (
+                                local oldPath = diffuseMap.filename
+                                if findItem (for m in mapPathMapping collect m[1]) oldPath == 0 then (
+                                    -- 获取文件名
+                                    local fileName = filenameFromPath oldPath
+                                    -- 构建新路径
+                                    local newPath = pathConfig.appendPath mapsDir fileName
+                                    
+                                    -- 复制文件
+                                    if doesFileExist oldPath then (
+                                        copyFile oldPath newPath
+                                        -- 更新材质的贴图路径
+                                        diffuseMap.filename = newPath
+                                        append mapPathMapping #(oldPath, newPath)
+                                    )
+                                )
+                            )
+                        )
+                    )
+                ) else (
+                    local diffuseMap = case classof obj.material of (
+                        StandardMaterial: obj.material.diffuseMap
+                        VRayMtl: obj.material.texmap_diffuse
+                        PhysicalMaterial: obj.material.base_color_map
+                        default: undefined
+                    )
+                    
+                    if diffuseMap != undefined and diffuseMap.filename != undefined then (
+                        local oldPath = diffuseMap.filename
+                        if findItem (for m in mapPathMapping collect m[1]) oldPath == 0 then (
+                            -- 获取文件名
+                            local fileName = filenameFromPath oldPath
+                            -- 构建新路径
+                            local newPath = pathConfig.appendPath mapsDir fileName
+                            
+                            -- 复制文件
+                            if doesFileExist oldPath then (
+                                copyFile oldPath newPath
+                                -- 更新材质的贴图路径
+                                diffuseMap.filename = newPath
+                                append mapPathMapping #(oldPath, newPath)
+                            )
+                        )
+                    )
+                )
+            )
+        )
+        
+        return mapPathMapping
+    ) catch (
+        format "归档贴图出错: %\n" (getCurrentException())
+        return #()
+    )
+)
+
+-- 修改数字填充函数，使用更安全的方式处理数字
+fn formatNumberWithLeadingZeros num width = (
+    try (
+        -- 确保输入值有效
+        if num == undefined do num = 1
+        if width == undefined do width = 3
+        
+        -- 转换为字符串并填充
+        local numStr = num as string
+        while numStr.count < width do (
+            numStr = "0" + numStr
+        )
+        return numStr
+    ) catch (
+        -- 发生错误时返回默认值
+        return "001"
+    )
+)
+
+-- 修改重命名函数
+fn processTextureRename obj startNumber fillWidth baseCode cityName projName abbrName = (
+    try (
+        local renameMappings = #()
+        local currentNumber = startNumber
+        
+        if obj.material != undefined then (
+            if classof obj.material == MultiMaterial then (
+                for i = 1 to obj.material.numsubs do (
+                    local subMat = obj.material[i]
+                    if subMat != undefined then (
+                        local diffuseMap = case classof subMat of (
+                            StandardMaterial: subMat.diffuseMap
+                            VRayMtl: subMat.texmap_diffuse
+                            PhysicalMaterial: subMat.base_color_map
+                            default: undefined
+                        )
+                        
+                        if diffuseMap != undefined and diffuseMap.filename != undefined then (
+                            local oldPath = diffuseMap.filename
+                            if findItem (for m in renameMappings collect m[1]) oldPath == 0 then (
+                                local dir = getFilenamePath oldPath
+                                local ext = getFilenameType oldPath
+                                
+                                -- 生成新的贴图名称
+                                local numStr = formatNumberWithLeadingZeros currentNumber fillWidth
+                                local newName = baseCode + "_" + cityName + "_" + projName + "_" + abbrName + "_" + numStr
+                                local newPath = dir + newName + ext
+                                
+                                append renameMappings #(oldPath, newPath)
+                                currentNumber += 1
+                            )
+                        )
+                    )
+                )
+            ) else (
+                local diffuseMap = case classof obj.material of (
+                    StandardMaterial: obj.material.diffuseMap
+                    VRayMtl: obj.material.texmap_diffuse
+                    PhysicalMaterial: obj.material.base_color_map
+                    default: undefined
+                )
+                
+                if diffuseMap != undefined and diffuseMap.filename != undefined then (
+                    local oldPath = diffuseMap.filename
+                    if findItem (for m in renameMappings collect m[1]) oldPath == 0 then (
+                        local dir = getFilenamePath oldPath
+                        local ext = getFilenameType oldPath
+                        
+                        -- 生成新的贴图名称
+                        local numStr = formatNumberWithLeadingZeros currentNumber fillWidth
+                        local newName = baseCode + "_" + cityName + "_" + projName + "_" + abbrName + "_" + numStr
+                        local newPath = dir + newName + ext
+                        
+                        append renameMappings #(oldPath, newPath)
+                        currentNumber += 1
+                    )
+                )
+            )
+        )
+        
+        return #(renameMappings, currentNumber)
+    ) catch (
+        format "处理贴图命名时出错: %\n" (getCurrentException())
+        return #(#(), startNumber)
+    )
 )
