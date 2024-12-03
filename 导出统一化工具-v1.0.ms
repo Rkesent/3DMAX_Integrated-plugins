@@ -1,6 +1,8 @@
--- 快速贴图替换.ms
+-- 导出统一化工具.ms
 -- 这个脚本用于查找和替换3ds Max场景中丢失的漫反射贴图
-
+-- 如出现报错不能自己修改请联系作者：ly2552674305@163.com
+-- 开源地址：https://github.com/Rkesent/3DMAX_Integrated-plugins
+-- 可在上面网址更新脚本
 -- 全局变量
 global missingMaps = #()
 global isProcessing = false
