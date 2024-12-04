@@ -3,9 +3,96 @@
 -- 如出现报错不能自己修改请联系作者：ly2552674305@163.com
 -- 开源地址：https://github.com/Rkesent/3DMAX_Integrated-plugins
 -- 可在上面网址更新脚本
+
 -- 全局变量
 global missingMaps = #()
 global isProcessing = false
+
+-- 新增：输入验证函数
+fn trimAndValidateInput txt = (
+    if txt == undefined then return false
+    local trimmed = trimRight (trimLeft txt)
+    trimmed != ""
+)
+
+-- 新增：序号生成函数
+fn generateSequenceNumber num width = (
+    try (
+        -- 确保是有效数字
+        local validNum = if num == undefined then 1 else num as integer
+        -- 转换为字符串并填充
+        local numStr = validNum as string
+        while numStr.count < width do (
+            numStr = "0" + numStr
+        )
+        return numStr
+    ) catch (
+        format "序号生成错误: %\n" (getCurrentException())
+        return "001" -- 返回默认值
+    )
+)
+
+-- 新增：对象重命名函数
+fn renameObject obj newName = (
+    try (
+        if obj != undefined and isValidNode obj then (
+            local oldName = obj.name
+            obj.name = newName
+            -- 验证重命名是否成功
+            if obj.name != newName then (
+                format "重命名失败: % -> %\n" oldName newName
+                return false
+            )
+            return true
+        )
+        return false
+    ) catch (
+        format "重命名出错: %\n" (getCurrentException())
+        return false
+    )
+)
+
+-- 新增：批量重命名函数
+fn renameModels baseCode cityName projName abbrName startNum fillCount objsToProcess = (
+    try (
+        local processedCount = 0
+        local errorCount = 0
+        local errorLog = stringStream ""
+        
+        for i = 1 to objsToProcess.count do (
+            try (
+                local obj = objsToProcess[i]
+                if obj != undefined and isValidNode obj then (
+                    -- 生成序号
+                    local currentNum = startNum + i - 1
+                    local numStr = generateSequenceNumber currentNum fillCount
+                    
+                    -- 生成新名称
+                    local newName = baseCode + "_" + cityName + "_" + projName + "_" + abbrName + "_" + numStr
+                    
+                    -- 执行重命名
+                    local oldName = obj.name
+                    if renameObject obj newName then (
+                        processedCount += 1
+                    ) else (
+                        errorCount += 1
+                        format "重命名失败: % -> %\n" oldName newName to:errorLog
+                    )
+                )
+            ) catch (
+                errorCount += 1
+                format "处理对象时出错: %\n" (getCurrentException()) to:errorLog
+            )
+        )
+        
+        -- 返回处理结果
+        return #(processedCount, errorCount, errorLog as string)
+        
+    ) catch (
+        format "重命名过程出错: %\n" (getCurrentException())
+        return #(0, 0, "重命名过程发生严重错误")
+    )
+)
 
 -- 添加必要的辅助函数
 -- 获取材质的贴图名称
@@ -838,7 +925,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
             local totalCount = scenematerials.count
             local convertedCount = 0
 
-            -- 遍历景中的所有材质
+            -- 遍历景���的所有材质
             for i = 1 to totalCount do
             (
                 local oldMat = scenematerials[i]
@@ -862,7 +949,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
             logMessage += "------------------------ \r\n"
             insertLog logMessage
         ) catch (
-            messageBox ("转换��质时发生错误：" + (getCurrentException())) title:"错误"
+            messageBox ("转换质时发生错误：" + (getCurrentException())) title:"错误"
         )
         isProcessing = false
         enableButton btnConvertToStandard
@@ -997,19 +1084,21 @@ rollout replaceMissingMapsRollout "快速贴图替换"
             try (
                 local hasValidOperation = false
                 
-                -- 检查模型重命名功能
+                -- 检��模型重命名功能
                 if chk_enableRename.checked then (
                     -- 检查必填字段是否为空
-                    if base1.text != "" and city1.text != "" and proj1.text != "" and abbr1.text != "" then (
+                    if (trimAndValidateInput base1.text) and 
+                       (trimAndValidateInput city1.text) and 
+                       (trimAndValidateInput proj1.text) and 
+                       (trimAndValidateInput abbr1.text) then (
                         hasValidOperation = true
                         local startTime = timestamp()
-                        local processedCount = 0
                         
                         -- 获取输入值并确保它们都有效
-                        local baseCode = base1.text
-                        local cityName = city1.text
-                        local projName = proj1.text
-                        local abbrName = abbr1.text
+                        local baseCode = trimRight (trimLeft base1.text)
+                        local cityName = trimRight (trimLeft city1.text)
+                        local projName = trimRight (trimLeft proj1.text)
+                        local abbrName = trimRight (trimLeft abbr1.text)
                         local startNum = try(start1.value as integer)catch(1)
                         local fillCount = try(fillNum1.value as integer)catch(3)
                         
@@ -1022,30 +1111,17 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                                 return undefined
                             )
                         ) else (
-                            for obj in geometry where not obj.isHidden do (
+                            for obj in geometry where (not obj.isHidden and isValidNode obj) do (
                                 append objsToProcess obj
+                            )
+                            if objsToProcess.count == 0 then (
+                                messageBox "场景中没有可处理的对象！" title:"错误"
+                                return undefined
                             )
                         )
                         
-                        -- 开始重命名
-                        for i = 1 to objsToProcess.count do (
-                            try (
-                                local obj = objsToProcess[i]
-                                -- 确保数字处理正确
-                                local currentNum = startNum + i - 1
-                                local numStr = padNumber currentNum fillCount "0"
-                                
-                                -- 组合新名称，确保每个部分都用下划线连接
-                                local newName = baseCode + "_" + cityName + "_" + projName + "_" + abbrName + "_" + numStr
-                                
-                                -- 重命名对象
-                                obj.name = newName
-                                processedCount += 1
-                            ) catch (
-                                format "处理对象 % 时出错: %\n" i (getCurrentException())
-                                continue
-                            )
-                        )
+                        -- 执行重命名
+                        local result = renameModels baseCode cityName projName abbrName startNum fillCount objsToProcess
                         
                         local endTime = timestamp()
                         local elapsedTime = (endTime - startTime) / 1000.0
@@ -1053,7 +1129,11 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                         -- 生成日志信息
                         local logMessage = "------------------------ \r\n"
                         logMessage += "模型重命名完成\r\n"
-                        logMessage += "处理模型数: " + processedCount as string + "\r\n"
+                        logMessage += "成功处理: " + result[1] as string + "个\r\n"
+                        if result[2] > 0 then (
+                            logMessage += "失败数量: " + result[2] as string + "个\r\n"
+                            logMessage += "错误信息:\n" + result[3]
+                        )
                         logMessage += "起始序号: " + startNum as string + "\r\n"
                         logMessage += "填充位数: " + fillCount as string + "\r\n"
                         logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
