@@ -57,6 +57,7 @@ fn renameModels baseCode cityName projName abbrName startNum fillCount objsToPro
     local errorLog = stringStream ""
     local processedCount = 0
     local errorCount = 0
+    local duplicateNames = #()
     
     try (
         -- 验证输入参数
@@ -66,8 +67,40 @@ fn renameModels baseCode cityName projName abbrName startNum fillCount objsToPro
             return #(0, 1, errorLog as string)
         )
         
+        -- 验证对象数组
+        if objsToProcess == undefined or objsToProcess.count == 0 then (
+            format "没有要处理的对象\n" to:errorLog
+            return #(0, 1, errorLog as string)
+        )
+        
         -- 当前序号
         local currentNum = startNum
+        
+        -- 预先检查名称冲突
+        local proposedNames = #()
+        for obj in objsToProcess do (
+            if obj != undefined and isValidNode obj then (
+                local numStr = formatNumberWithLeadingZeros currentNum fillCount
+                local newName = baseCode + "_" + cityName + "_" + projName + "_" + abbrName + "_" + numStr
+                
+                -- 检查名称是否已存在
+                if findItem proposedNames newName > 0 then (
+                    append duplicateNames newName
+                )
+                append proposedNames newName
+                currentNum += 1
+            )
+        )
+        
+        -- 如果存在重复名称，记录错误并返回
+        if duplicateNames.count > 0 then (
+            format "检测到重复名称:\n" to:errorLog
+            for name in duplicateNames do format "  %\n" name to:errorLog
+            return #(0, duplicateNames.count, errorLog as string)
+        )
+        
+        -- 重置序号进行实际重命名
+        currentNum = startNum
         
         -- 处理每个对象
         for obj in objsToProcess do (
@@ -77,8 +110,10 @@ fn renameModels baseCode cityName projName abbrName startNum fillCount objsToPro
                     local numStr = formatNumberWithLeadingZeros currentNum fillCount
                     local newName = baseCode + "_" + cityName + "_" + projName + "_" + abbrName + "_" + numStr
                     
-                    -- 尝试重命名
+                    -- 保存旧名称用于错误报告
                     local oldName = obj.name
+                    
+                    -- 尝试重命名
                     obj.name = newName
                     
                     -- 验证重命名是否成功
@@ -91,11 +126,11 @@ fn renameModels baseCode cityName projName abbrName startNum fillCount objsToPro
                     )
                 ) else (
                     errorCount += 1
-                    format "无效对象\n" to:errorLog
+                    format "无效对象: %\n" (if obj != undefined then obj.name else "undefined") to:errorLog
                 )
             ) catch (
                 errorCount += 1
-                format "处理对象时出错: %\n" (getCurrentException()) to:errorLog
+                format "处理对象时出错: % (对象: %)\n" (getCurrentException()) (if obj != undefined then obj.name else "undefined") to:errorLog
             )
         )
         
@@ -440,6 +475,74 @@ fn enableButton btn = (
     )
 )
 
+-- 新增：ListView操作辅助函数
+fn initializeListView lv = (
+    try (
+        if lv != undefined then (
+            lv.View = lv.View.Details
+            lv.FullRowSelect = true
+            lv.GridLines = true
+            lv.MultiSelect = true
+            
+            -- 清除现有列
+            lv.Columns.Clear()
+            
+            -- 添加列
+            lv.Columns.Add "模型名称" 100
+            lv.Columns.Add "材质" 100
+            lv.Columns.Add "ID" 50
+            lv.Columns.Add "丢失贴图名称" 120
+            lv.Columns.Add "错误信息" 100
+            
+            return true
+        )
+        return false
+    ) catch (
+        format "初始化ListView失败: %\n" (getCurrentException())
+        return false
+    )
+)
+
+fn clearListView lv = (
+    try (
+        if lv != undefined and lv.Items != undefined then (
+            lv.Items.Clear()
+            lv.BeginUpdate()
+            return true
+        )
+        return false
+    ) catch (
+        format "清理ListView失败: %\n" (getCurrentException())
+        return false
+    )
+)
+
+fn addListViewItem lv item = (
+    try (
+        if lv != undefined and lv.Items != undefined then (
+            lv.Items.Add item
+            return true
+        )
+        return false
+    ) catch (
+        format "添加ListView项失败: %\n" (getCurrentException())
+        return false
+    )
+)
+
+fn endListViewUpdate lv = (
+    try (
+        if lv != undefined then (
+            lv.EndUpdate()
+            return true
+        )
+        return false
+    ) catch (
+        format "结束ListView更新失败: %\n" (getCurrentException())
+        return false
+    )
+)
+
 -- 创建UI
 rollout replaceMissingMapsRollout "快速贴图替换"
 (
@@ -456,8 +559,14 @@ rollout replaceMissingMapsRollout "快速贴图替换"
 
     -- ID限制下拉框和标签
     label lblIDLimit "ID限制:" pos:[335,370] width:50 height:20
-    dotNetControl cmbIDLimit "System.Windows.Forms.ComboBox" pos:[330,385] width:60 height:40
+    dotNetControl cmbIDLimit "System.Windows.Forms.ComboBox" pos:[330,390] width:60 height:40
+    
+    -- 添加贴图大小检测单选框
+    checkbox chkMapSizeCheck "贴图大小检测" pos:[335,320] width:90 height:20 checked:false
 
+    -- 添加修复贴图尺寸按钮
+    button btnFixTextures "修复贴图尺寸" pos:[335,340] width:100 height:20
+    
     -- 按钮
     button btnCheck "检查" pos:[10,320] width:100 height:40
     button btnReplace "替换" pos:[120,320] width:100 height:40
@@ -527,8 +636,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     )
 
     -- 初始化列表视图
-    fn initListView =
-    (
+    fn initListView = (
         lvModels.view = lvModels.View.Details
         lvModels.GridLines = true
         lvModels.FullRowSelect = true
@@ -553,16 +661,13 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         
         try (
             local startTime = timestamp()
-            -- 清理之前的数组
             if missingMaps != undefined do (
                 missingMaps = #()
                 gc light:true
             )
             
-            -- 清理ListView
             if lvModels != undefined do (
                 lvModels.Items.Clear()
-                -- 使用 BeginUpdate 替代 SuspendLayout
                 lvModels.BeginUpdate()
             )
             
@@ -570,12 +675,14 @@ rollout replaceMissingMapsRollout "快速贴图替换"
             local totalMaps = 0
             local missingModelsCount = 0
             local missingMapsCount = 0
+            local invalidSizeCount = 0
             local uniqueMissingMaps = #()
             local uniqueMissingModels = #()
 
-            -- 使用for循环替代for...in以优化性能
-            for i = 1 to geometry.count do (
-                local obj = geometry[i]
+            -- 检查是否启用贴图大小检测
+            local checkSize = chkMapSizeCheck.checked
+
+            for obj in geometry do (
                 if obj.material != undefined do (
                     local mat = obj.material
                     if classof mat == Multimaterial then (
@@ -592,28 +699,44 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                                 if diffuseMap != undefined then (
                                     totalMaps += 1
                                     local fileName = diffuseMap.filename
-                                    if fileName != "" and not doesFileExist fileName then (
-                                        local fileBaseName = getFilenameFile fileName
-                                        local fileExtension = getFilenameType fileName
-                                        append missingMaps #(obj.name, subMat.name, i, fileBaseName + fileExtension)
-                                        
-                                        -- 优化数组查找
-                                        local mapKey = fileBaseName + fileExtension
-                                        if findItem uniqueMissingMaps mapKey == 0 do (
-                                            append uniqueMissingMaps mapKey
-                                            missingMapsCount += 1
-                                        )
-                                        
-                                        if findItem uniqueMissingModels obj.name == 0 do (
-                                            append uniqueMissingModels obj.name
-                                            missingModelsCount += 1
+                                    if fileName != "" then (
+                                        if not doesFileExist fileName then (
+                                            -- 处理丢失贴图...
+                                            local fileBaseName = getFilenameFile fileName
+                                            local fileExtension = getFilenameType fileName
+                                            append missingMaps #(obj.name, subMat.name, i, fileBaseName + fileExtension)
+                                            
+                                            if findItem uniqueMissingMaps (fileBaseName + fileExtension) == 0 do (
+                                                append uniqueMissingMaps (fileBaseName + fileExtension)
+                                                missingMapsCount += 1
+                                            )
+                                            
+                                            if findItem uniqueMissingModels obj.name == 0 do (
+                                                append uniqueMissingModels obj.name
+                                                missingModelsCount += 1
+                                            )
+                                        ) else if checkSize do (
+                                            -- 检查贴图尺寸
+                                            local bmap = openBitMap fileName
+                                            local sizeCheck = checkTextureSize bmap
+                                            if not sizeCheck[1] do (
+                                                local listItem = dotNetObject "System.Windows.Forms.ListViewItem" obj.name
+                                                listItem.SubItems.Add subMat.name
+                                                listItem.SubItems.Add (i as string)
+                                                listItem.SubItems.Add (filenameFromPath fileName)
+                                                listItem.SubItems.Add sizeCheck[2]
+                                                -- 修改这里的颜色为黑色
+                                                listItem.ForeColor = (dotNetClass "System.Drawing.Color").Black
+                                                lvModels.Items.Add listItem
+                                                invalidSizeCount += 1
+                                            )
+                                            if bmap != undefined do close bmap
                                         )
                                     )
                                 )
                             )
                         )
-                    )
-                    else (
+                    ) else (
                         local diffuseMap = case classof mat of (
                             StandardMaterial: mat.diffuseMap
                             VRayMtl: mat.texmap_diffuse
@@ -624,21 +747,38 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                         if diffuseMap != undefined then (
                             totalMaps += 1
                             local fileName = diffuseMap.filename
-                            if fileName != "" and not doesFileExist fileName then (
-                                local fileBaseName = getFilenameFile fileName
-                                local fileExtension = getFilenameType fileName
-                                append missingMaps #(obj.name, mat.name, 1, fileBaseName + fileExtension)
-                                
-                                -- 优化数组查找
-                                local mapKey = fileBaseName + fileExtension
-                                if findItem uniqueMissingMaps mapKey == 0 do (
-                                    append uniqueMissingMaps mapKey
-                                    missingMapsCount += 1
-                                )
-                                
-                                if findItem uniqueMissingModels obj.name == 0 do (
-                                    append uniqueMissingModels obj.name
-                                    missingModelsCount += 1
+                            if fileName != "" then (
+                                if not doesFileExist fileName then (
+                                    -- 处理丢失贴图...
+                                    local fileBaseName = getFilenameFile fileName
+                                    local fileExtension = getFilenameType fileName
+                                    append missingMaps #(obj.name, mat.name, 1, fileBaseName + fileExtension)
+                                    
+                                    if findItem uniqueMissingMaps (fileBaseName + fileExtension) == 0 do (
+                                        append uniqueMissingMaps (fileBaseName + fileExtension)
+                                        missingMapsCount += 1
+                                    )
+                                    
+                                    if findItem uniqueMissingModels obj.name == 0 do (
+                                        append uniqueMissingModels obj.name
+                                        missingModelsCount += 1
+                                    )
+                                ) else if checkSize do (
+                                    -- 检查贴图尺寸
+                                    local bmap = openBitMap fileName
+                                    local sizeCheck = checkTextureSize bmap
+                                    if not sizeCheck[1] do (
+                                        local listItem = dotNetObject "System.Windows.Forms.ListViewItem" obj.name
+                                        listItem.SubItems.Add mat.name
+                                        listItem.SubItems.Add "1"
+                                        listItem.SubItems.Add (filenameFromPath fileName)
+                                        listItem.SubItems.Add sizeCheck[2]
+                                        -- 修改这里的颜色为黑色
+                                        listItem.ForeColor = (dotNetClass "System.Drawing.Color").Black
+                                        lvModels.Items.Add listItem
+                                        invalidSizeCount += 1
+                                    )
+                                    if bmap != undefined do close bmap
                                 )
                             )
                         )
@@ -646,22 +786,19 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                 )
             )
 
-            -- 批量更新UI
-            if lvModels != undefined do (
-                local items = dotNetObject "System.Windows.Forms.ListViewItem[]" missingMaps.count
-                for i = 1 to missingMaps.count do (
-                    local map = missingMaps[i]
-                    local item = dotNetObject "System.Windows.Forms.ListViewItem" map[1]
-                    item.SubItems.Add map[2]
-                    item.SubItems.Add (map[3] as string)
-                    item.SubItems.Add map[4]
-                    item.SubItems.Add "贴图丢失"
-                    items[i-1] = item
-                )
-                lvModels.Items.AddRange items
-                -- 使用 EndUpdate 替代 ResumeLayout
-                lvModels.EndUpdate()
+            -- 更新列表显示丢失的贴图
+            for map in missingMaps do (
+                local item = dotNetObject "System.Windows.Forms.ListViewItem" map[1]
+                item.SubItems.Add map[2]
+                item.SubItems.Add (map[3] as string)
+                item.SubItems.Add map[4]
+                item.SubItems.Add "贴图丢失"
+                -- 修改这里的颜色为黑色
+                item.ForeColor = (dotNetClass "System.Drawing.Color").Black
+                lvModels.Items.Add item
             )
+
+            lvModels.EndUpdate()
 
             local endTime = timestamp()
             local elapsedTime = (endTime - startTime) / 1000.0
@@ -669,17 +806,20 @@ rollout replaceMissingMapsRollout "快速贴图替换"
             -- 生成日志信息
             logMessage = stringStream ""
             format "------------------------ \r\n" to:logMessage
-            if missingMaps.count == 0 then (
-                format "未找到丢失的贴图。\r\n" to:logMessage
+            if missingMaps.count == 0 and invalidSizeCount == 0 then (
+                format "未发现问题。\r\n" to:logMessage
             )
             format "总模型数: %个\r\n总贴图数: %张\r\n" totalModels totalMaps to:logMessage
             format "丢失模型数: %个\r\n丢失贴图数: %张\r\n" missingModelsCount missingMapsCount to:logMessage
+            if checkSize then (
+                format "非2次幂贴图数: %张\r\n" invalidSizeCount to:logMessage
+            )
             format "检查耗时: % 秒\r\n" elapsedTime to:logMessage
             format "###########$$$########## \r\n" to:logMessage
 
             insertLog (logMessage as string)
             
-            -- 清理临时变量
+            -- 清理资源
             if items != undefined do items = undefined
             if logMessage != undefined do (
                 try(free logMessage)catch()
@@ -694,7 +834,6 @@ rollout replaceMissingMapsRollout "快速贴图替换"
             if lvModels != undefined do (
                 lvModels.EndUpdate()
             )
-            -- 清理临时变量
             if items != undefined do items = undefined
             if logMessage != undefined do (
                 try(free logMessage)catch()
@@ -733,7 +872,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                     triFaceCount = selectedObj.numFaces
                 )
 
-                edtModelInfo.text = "名: " + selectedObj.name + "\r\n材质ID数量: " + materialCount as string + "个\r\n四边面数量: " + quadFaceCount as string + "面"
+                edtModelInfo.text = "名: " + selectedObj.name + "\r\n材质ID数量: " + materialCount as string + "个\r\n四边面数: " + quadFaceCount as string + "面"
             )
         )
     )
@@ -748,16 +887,139 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         )
     )
 
-    -- 检查按钮点击事件
+    -- ���查按钮点击事件
     on btnCheck pressed do (
         if isProcessing do return()
         isProcessing = true
         disableButton btnCheck
+        
         try (
-            checkMissingFiles()
+            -- 清空列表并开始更新
+            lvModels.Items.Clear()
+            lvModels.BeginUpdate()
+            
+            -- 确保 missingMaps 数组已初始化
+            if missingMaps == undefined do missingMaps = #()
+            
+            -- 遍历场景中的所有几何体
+            local totalModels = geometry.count
+            local totalMaps =0
+            local missingCount = 0
+            local invalidSizeCount = 0
+            
+            -- 获取是否启用贴图大小检测
+            local checkSize = chkMapSizeCheck.checked
+            
+            for obj in geometry do (
+                if obj.material != undefined then (
+                    if classof obj.material == MultiMaterial then (
+                        -- 处理多重材质
+                        for i = 1 to obj.material.numsubs do (
+                            local subMat = obj.material[i]
+                            if subMat != undefined then (
+                                local diffuseMap = case classof subMat of (
+                                    StandardMaterial: subMat.diffuseMap
+                                    VRayMtl: subMat.texmap_diffuse
+                                    PhysicalMaterial: subMat.base_color_map
+                                    default: undefined
+                                )
+                                
+                                if diffuseMap != undefined then (
+                                    totalMaps += 1
+                                    local fileName = diffuseMap.filename
+                                    
+                                    if not doesFileExist fileName then (
+                                        -- 处理丢失贴图
+                                        local listItem = dotNetObject "System.Windows.Forms.ListViewItem" obj.name
+                                        listItem.SubItems.Add subMat.name
+                                        listItem.SubItems.Add (i as string)
+                                        listItem.SubItems.Add (filenameFromPath fileName)
+                                        listItem.SubItems.Add "贴图丢失"
+                                        lvModels.Items.Add listItem
+                                        
+                                        append missingMaps #(obj.name, subMat.name, i, filenameFromPath fileName)
+                                        missingCount += 1
+                                    ) else if checkSize do (
+                                        -- 检查贴图尺寸
+                                        local bmap = openBitMap fileName
+                                        local sizeCheck = checkTextureSize bmap
+                                        if not sizeCheck[1] do (
+                                            local listItem = dotNetObject "System.Windows.Forms.ListViewItem" obj.name
+                                            listItem.SubItems.Add subMat.name
+                                            listItem.SubItems.Add (i as string)
+                                            listItem.SubItems.Add (filenameFromPath fileName)
+                                            listItem.SubItems.Add ("非2次幂: " + sizeCheck[2])
+                                            lvModels.Items.Add listItem
+                                            invalidSizeCount += 1
+                                        )
+                                        if bmap != undefined do close bmap
+                                    )
+                                )
+                            )
+                        )
+                    ) else (
+                        -- 处理单一材质
+                        local diffuseMap = case classof obj.material of (
+                            StandardMaterial: obj.material.diffuseMap
+                            VRayMtl: obj.material.texmap_diffuse
+                            PhysicalMaterial: obj.material.base_color_map
+                            default: undefined
+                        )
+                        
+                        if diffuseMap != undefined then (
+                            totalMaps += 1
+                            local fileName = diffuseMap.filename
+                            
+                            if not doesFileExist fileName then (
+                                -- 处理丢失贴图
+                                local listItem = dotNetObject "System.Windows.Forms.ListViewItem" obj.name
+                                listItem.SubItems.Add obj.material.name
+                                listItem.SubItems.Add "1"
+                                listItem.SubItems.Add (filenameFromPath fileName)
+                                listItem.SubItems.Add "贴图丢失"
+                                lvModels.Items.Add listItem
+                                
+                                append missingMaps #(obj.name, obj.material.name, 1, filenameFromPath fileName)
+                                missingCount += 1
+                            ) else if checkSize do (
+                                -- 检查贴图尺寸
+                                local bmap = openBitMap fileName
+                                local sizeCheck = checkTextureSize bmap
+                                if not sizeCheck[1] do (
+                                    local listItem = dotNetObject "System.Windows.Forms.ListViewItem" obj.name
+                                    listItem.SubItems.Add obj.material.name
+                                    listItem.SubItems.Add "1"
+                                    listItem.SubItems.Add (filenameFromPath fileName)
+                                    listItem.SubItems.Add (sizeCheck[2])
+                                    lvModels.Items.Add listItem
+                                    invalidSizeCount += 1
+                                )
+                                if bmap != undefined do close bmap
+                            )
+                        )
+                    )
+                )
+            )
+            
+            -- 恢复列表更新
+            lvModels.EndUpdate()
+            
+            -- 生成日志信息
+            local logMessage = "------------------------ \r\n"
+            logMessage += "检查完成\r\n"
+            logMessage += "总模型数: " + totalModels as string + "\r\n"
+            logMessage += "总贴图数: " + totalMaps as string + "\r\n"
+            logMessage += "丢失贴图数: " + missingCount as string + "\r\n"
+            if checkSize then (
+                logMessage += "非2次幂贴图数: " + invalidSizeCount as string + "\r\n"
+            )
+            logMessage += "------------------------ \r\n"
+            insertLog logMessage
+            
         ) catch (
             messageBox ("检查贴图时发生错误：" + (getCurrentException())) title:"错误"
         )
+        
         isProcessing = false
         enableButton btnCheck
     )
@@ -765,18 +1027,20 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     -- 替换按钮点击事件
     on btnReplace pressed do (
         try (
-            -- 禁用按钮防止重复点击
-            disableButton btnReplace
-            
-            -- 临时变量声明
-            local selectedFile = undefined
+            -- 初始化计数器
             local successCount = 0
             local failCount = 0
             
+            -- 禁用按钮防止重复点击
+            disableButton btnReplace
+            
             -- 检查是否有选中的项目
             if lvModels.SelectedItems.Count > 0 then (
-                selectedFile = getOpenFileName caption:"选择替换贴图" types:"图像文件(*.jpg;*.png;*.tga)|*.jpg;*.png;*.tga|所有文件(*.*)|*.*|"
-                if selectedFile != undefined do (
+                -- 处理选中项
+                selectedFile = getOpenFileName caption:"选择替换贴图" \
+                    types:"图像文件(*.jpg;*.png;*.tga)|*.jpg;*.png;*.tga|所有文件(*.*)|*.*|"
+                
+                if selectedFile != undefined then (
                     -- 遍历选中的项目
                     for i = 0 to lvModels.SelectedItems.Count - 1 do (
                         try (
@@ -787,12 +1051,11 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                             
                             -- 获取对象
                             local obj = getNodeByName objName
-                            if obj != undefined do (
-                                local mat = obj.material
-                                if classof mat == Multimaterial then (
+                            if obj != undefined and obj.material != undefined then (
+                                if classof obj.material == MultiMaterial then (
                                     -- 处理多重材质
-                                    if matID > 0 and matID <= mat.numsubs then (
-                                        local subMat = mat[matID]
+                                    if matID > 0 and matID <= obj.material.numsubs then (
+                                        local subMat = obj.material[matID]
                                         if subMat != undefined then (
                                             local diffuseMap = case classof subMat of (
                                                 StandardMaterial: subMat.diffuseMap
@@ -804,23 +1067,38 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                                             if diffuseMap != undefined then (
                                                 diffuseMap.filename = selectedFile
                                                 successCount += 1
-                                            ) else failCount += 1
-                                        ) else failCount += 1
-                                    ) else failCount += 1
+                                                -- 更新列表项状态
+                                                selectedItem.SubItems.Item[4].Text = "替换成功"
+                                            ) else (
+                                                failCount += 1
+                                                selectedItem.SubItems.Item[4].Text = "无贴图通道"
+                                            )
+                                        ) else (
+                                            failCount += 1
+                                            selectedItem.SubItems.Item[4].Text = "材质ID无效"
+                                        )
+                                    )
                                 ) else (
                                     -- 处理单一材质
-                                    local diffuseMap = case classof mat of (
-                                        StandardMaterial: mat.diffuseMap
-                                        VRayMtl: mat.texmap_diffuse
-                                        PhysicalMaterial: mat.base_color_map
+                                    local diffuseMap = case classof obj.material of (
+                                        StandardMaterial: obj.material.diffuseMap
+                                        VRayMtl: obj.material.texmap_diffuse
+                                        PhysicalMaterial: obj.material.base_color_map
                                         default: undefined
                                     )
                                     
                                     if diffuseMap != undefined then (
                                         diffuseMap.filename = selectedFile
                                         successCount += 1
-                                    ) else failCount += 1
+                                        selectedItem.SubItems.Item[4].Text = "替换成功"
+                                    ) else (
+                                        failCount += 1
+                                        selectedItem.SubItems.Item[4].Text = "无贴图通道"
+                                    )
                                 )
+                            ) else (
+                                failCount += 1
+                                selectedItem.SubItems.Item[4].Text = "对象或材质无效"
                             )
                         ) catch (
                             failCount += 1
@@ -835,22 +1113,24 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                 -- 检查完成后，如果没有丢失的贴图则提示并返回
                 if missingMaps.count == 0 then (
                     messageBox "未检测到能替换的贴图！" title:"提示"
+                    enableButton btnReplace
                     return undefined
                 )
                 
-                selectedFile = getOpenFileName caption:"选择替换贴图" types:"图像文件(*.jpg;*.png;*.tga)|*.jpg;*.png;*.tga|所有文件(*.*)|*.*|"
-                if selectedFile != undefined do (
-                    -- 使用临时数组存储需要处理的对象，避免直接使用全局变量
+                selectedFile = getOpenFileName caption:"选择替换贴图" \
+                    types:"图像文件(*.jpg;*.png;*.tga)|*.jpg;*.png;*.tga|所有文件(*.*)|*.*|"
+                
+                if selectedFile != undefined then (
+                    -- 使用临时数组存储需要处理的对象
                     local mapsToProcess = #()
                     join mapsToProcess missingMaps
                     
                     for map in mapsToProcess do (
                         try (
                             local obj = getNodeByName map[1]
-                            if obj != undefined do (
-                                local mat = obj.material
-                                if classof mat == Multimaterial then (
-                                    local subMat = mat[map[3]]
+                            if obj != undefined and obj.material != undefined then (
+                                if classof obj.material == MultiMaterial then (
+                                    local subMat = obj.material[map[3]]
                                     if subMat != undefined then (
                                         local diffuseMap = case classof subMat of (
                                             StandardMaterial: subMat.diffuseMap
@@ -865,10 +1145,10 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                                         ) else failCount += 1
                                     ) else failCount += 1
                                 ) else (
-                                    local diffuseMap = case classof mat of (
-                                        StandardMaterial: mat.diffuseMap
-                                        VRayMtl: mat.texmap_diffuse
-                                        PhysicalMaterial: mat.base_color_map
+                                    local diffuseMap = case classof obj.material of (
+                                        StandardMaterial: obj.material.diffuseMap
+                                        VRayMtl: obj.material.texmap_diffuse
+                                        PhysicalMaterial: obj.material.base_color_map
                                         default: undefined
                                     )
                                     
@@ -890,7 +1170,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
             )
             
             -- 生成日志信息
-            if selectedFile != undefined do (
+            if selectedFile != undefined then (
                 local logMessage = "------------------------ \r\n"
                 logMessage += "替换完成\r\n"
                 logMessage += "成功替换: " + successCount as string + "个\r\n"
@@ -912,17 +1192,17 @@ rollout replaceMissingMapsRollout "快速贴图替换"
             messageBox ("替换贴图时发生错误：" + (getCurrentException())) title:"错误"
         )
         
-        -- 重新启用按钮
+        -- 最后一定要重新启用按钮
         enableButton btnReplace
     )
 
-    -- 更换贴图路径按钮点击事件
+    -- 更换贴图路径按钮事件
     on btnChangePath pressed do (
         try (
             -- 禁用按钮，防止重复点击
             disableButton btnChangePath
             
-            -- 如果有选中项，只处理选中的项目
+            -- 收集需要处理的项目
             local itemsToProcess = if lvModels.SelectedItems.Count > 0 then (
                 -- 收集选中项的信息
                 for i = 0 to lvModels.SelectedItems.Count - 1 collect (
@@ -948,8 +1228,8 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                 local startTime = timestamp()
                 local processedCount = 0
                 local failedCount = 0
-                local uniquePaths = #() -- 用于存储已处理的路径
-                local pathUpdates = #() -- 预处理：收集所有需要更新的贴图路径
+                local uniquePaths = #()
+                local pathUpdates = #()
                 
                 -- 使用 with redraw off 来减少重绘
                 with redraw off (
@@ -957,13 +1237,138 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                     for itemInfo in itemsToProcess do (
                         local obj = getNodeByName itemInfo[1]
                         if obj != undefined and obj.material != undefined then (
-                            local mat = obj.material
-                            
-                            if classof mat == MultiMaterial then (
+                            if classof obj.material == MultiMaterial then (
                                 -- 处理多重材质
                                 local matID = itemInfo[3]
-                                if matID > 0 and matID <= mat.numsubs then (
-                                    local subMat = mat[matID]
+                                if matID > 0 and matID <= obj.material.numsubs then (
+                                    local subMat = obj.material[matID]
+                                    if subMat != undefined then (
+                                        local diffuseMap = case classof subMat of (
+                                            StandardMaterial: subMat.diffuseMap
+                                            VRayMtl: subMat.texmap_diffuse
+                                            PhysicalMaterial: subMat.base_color_map
+                                            default: undefined
+                                        )
+                                        
+                                        if diffuseMap != undefined and diffuseMap.filename != undefined then (
+                                            local currentPath = diffuseMap.filename
+                                            local fileName = filenameFromPath currentPath
+                                            local newFilePath = newPath + "\\" + fileName
+                                            append pathUpdates #(diffuseMap, currentPath, newFilePath)
+                                        )
+                                    )
+                                )
+                            )
+                        ) else (
+                            -- 处理单一材质
+                            local diffuseMap = case classof obj.material of (
+                                StandardMaterial: obj.material.diffuseMap
+                                VRayMtl: obj.material.texmap_diffuse
+                                PhysicalMaterial: obj.material.base_color_map
+                                default: undefined
+                            )
+                            
+                            if diffuseMap != undefined and diffuseMap.filename != undefined then (
+                                local currentPath = diffuseMap.filename
+                                local fileName = filenameFromPath currentPath
+                                local newFilePath = newPath + "\\" + fileName
+                                append pathUpdates #(diffuseMap, currentPath, newFilePath)
+                            )
+                        )
+                    )
+                    
+                    -- 批量更新贴图路径
+                    for update in pathUpdates do (
+                        try (
+                            local diffuseMap = update[1]
+                            local oldPath = update[2]
+                            local newFilePath = update[3]
+                            
+                            -- 检查是否已处理过该路径
+                            if findItem uniquePaths oldPath == 0 then (
+                                append uniquePaths oldPath
+                                -- 复制文件（如果存在）
+                                if doesFileExist oldPath then (
+                                    try(copyFile oldPath newFilePath)catch()
+                                )
+                            )
+                            
+                            -- 更新贴图路径
+                            diffuseMap.filename = newFilePath
+                            processedCount += 1
+                        ) catch (
+                            failedCount += 1
+                        )
+                    )
+                )
+                
+                local endTime = timestamp()
+                local elapsedTime = (endTime - startTime) / 1000.0
+                
+                -- 生成日志信息
+                local logMessage = "------------------------ \r\n"
+                logMessage += "路径更新完成\r\n"
+                logMessage += "更新模式: 丢失贴图\r\n"
+                logMessage += "处理贴图数: " + processedCount as string + "\r\n"
+                if failedCount > 0 then (
+                    logMessage += "失败数量: " + failedCount as string + "\r\n"
+                )
+                logMessage += "新路径: " + newPath + "\r\n"
+                logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
+                logMessage += "------------------------ \r\n"
+                insertLog logMessage
+                
+                -- 刷新检查结果
+                checkMissingFiles()
+            )
+        ) catch (
+            messageBox ("更换贴图路径时发生错误：" + (getCurrentException())) title:"错误"
+        )
+        
+        -- 重新启用按钮
+        enableButton btnChangePath
+    )
+
+    -- 添加右键点击事件
+    on btnChangePath rightClick do (
+        try (
+            -- 禁用按钮，防止重复点击
+            disableButton btnChangePath
+            
+            -- 右键点击时处理所有对象
+            local itemsToProcess = for obj in geometry where not obj.isHidden collect (
+                #(obj.name, "", 1) -- 使用相同的数据结构,但简化内容
+            )
+            
+            -- 检查是否有需要处理的项目
+            if itemsToProcess.count == 0 then (
+                messageBox "场景中没有可处理的模型。" title:"提示"
+                enableButton btnChangePath
+                return undefined
+            )
+            
+            -- 选择新路径
+            local newPath = getSavePath caption:"选择新的贴图路径"
+            if newPath != undefined do (
+                -- 其余处理代码与左键相同...
+                local startTime = timestamp()
+                local processedCount = 0
+                local failedCount = 0
+                local uniquePaths = #()
+                local pathUpdates = #()
+                
+                -- 使用 with redraw off 来减少重绘
+                with redraw off (
+                    -- 批量处理所有对象
+                    for itemInfo in itemsToProcess do (
+                        local obj = getNodeByName itemInfo[1]
+                        if obj != undefined and obj.material != undefined then (
+                            if classof obj.material == MultiMaterial then (
+                                -- 处理多重材质
+                                local matCount = obj.material.numsubs
+                                -- 处理所有子材质
+                                for i = 1 to matCount do (
+                                    local subMat = obj.material[i]
                                     if subMat != undefined then (
                                         local diffuseMap = case classof subMat of (
                                             StandardMaterial: subMat.diffuseMap
@@ -982,10 +1387,10 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                                 )
                             ) else (
                                 -- 处理单一材质
-                                local diffuseMap = case classof mat of (
-                                    StandardMaterial: mat.diffuseMap
-                                    VRayMtl: mat.texmap_diffuse
-                                    PhysicalMaterial: mat.base_color_map
+                                local diffuseMap = case classof obj.material of (
+                                    StandardMaterial: obj.material.diffuseMap
+                                    VRayMtl: obj.material.texmap_diffuse
+                                    PhysicalMaterial: obj.material.base_color_map
                                     default: undefined
                                 )
                                 
@@ -1009,8 +1414,8 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                             -- 检查是否已处理过该路径
                             if findItem uniquePaths oldPath == 0 then (
                                 append uniquePaths oldPath
-                                -- 复制文件（如果需要）
-                                if doesFileExist oldPath and not doesFileExist newFilePath then (
+                                -- 复制文件（如果存在）
+                                if doesFileExist oldPath then (
                                     try(copyFile oldPath newFilePath)catch()
                                 )
                             )
@@ -1030,10 +1435,12 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                 -- 生成日志信息
                 local logMessage = "------------------------ \r\n"
                 logMessage += "路径更新完成\r\n"
+                logMessage += "更新模式: 全部贴图\r\n"
                 logMessage += "处理贴图数: " + processedCount as string + "\r\n"
                 if failedCount > 0 then (
                     logMessage += "失败数量: " + failedCount as string + "\r\n"
                 )
+                logMessage += "新路径: " + newPath + "\r\n"
                 logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
                 logMessage += "------------------------ \r\n"
                 insertLog logMessage
@@ -1042,7 +1449,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                 checkMissingFiles()
             )
         ) catch (
-            messageBox ("更换贴图路径时发生错误：" + (getCurrentException())) title:"错误"
+            messageBox ("更换贴图路径发生错误：" + (getCurrentException())) title:"错误"
         )
         
         -- 重新启用按钮
@@ -1267,7 +1674,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         label plus2 "+" pos:[170,60] width:10 height:10 textColor:labelColor 
         label lbl3 "项目名称" pos:[180,35] width:60 height:20 textColor:labelColor
         label plus3 "+" pos:[250,60] width:10 height:10 textColor:labelColor 
-        label lbl4 "姓名简写" pos:[260,35] width:60 height:20 textColor:labelColor
+        label lbl4 "姓名写" pos:[260,35] width:60 height:20 textColor:labelColor
         label plus4 "+" pos:[330,60] width:10 height:10 textColor:labelColor
         label lbl5 "起始位" pos:[340,35] width:40 height:20 textColor:labelColor
         
@@ -1320,7 +1727,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
             try (
                 local hasValidOperation = false
                 
-                -- 检查模型重命名功能
+                -- 检查模型重命名能
                 if chk_enableRename.checked then (
                     -- 检查必填字段是否为空
                     if (trimAndValidateInput base1.text) and 
@@ -1553,11 +1960,11 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                 
                 -- 如果两个功能都未启用，显示提示
                 if not hasValidOperation then (
-                    messageBox "请至少启用一个命名功能并填写相关字段！" title:"提示"
+                    messageBox "至少启用一个命名功能并填写相关字段！" title:"示"
                     return undefined
                 )
                 
-                -- 成功执行后关闭窗口
+                -- 成功执行闭口
                 if hasValidOperation then (
                     try(
                         local timer = createCloseTimer()
@@ -1875,15 +2282,54 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     )
 
     -- 初始化
-    on replaceMissingMapsRollout open do (
+    fn initializeUI = (
         try (
-            initListView()
-            initLogTextBox()
-            initModelInfoTextBox()
-            initIDLimitComboBox()
+            -- 初始化ListView
+            if not initializeListView lvModels then (
+                throw "ListView初始化失败"
+            )
+            
+            -- 初始化日志文本框
+            if edtLog != undefined then (
+                edtLog.Multiline = true
+                edtLog.ReadOnly = true
+                edtLog.BackColor = (dotNetClass "System.Drawing.Color").LightGray
+                edtLog.Font = dotNetObject "System.Drawing.Font" "Arial" 9
+                edtLog.WordWrap = true
+                edtLog.ScrollBars = edtLog.ScrollBars.Vertical
+            )
+            
+            -- 初始化模型信息文本框
+            if edtModelInfo != undefined then (
+                edtModelInfo.Multiline = true
+                edtModelInfo.ReadOnly = true
+                edtModelInfo.TextAlign = edtModelInfo.TextAlign.Left
+                edtModelInfo.BackColor = (dotNetClass "System.Drawing.Color").LightGray
+                edtModelInfo.BorderStyle = edtModelInfo.BorderStyle.None
+            )
+            
+            -- 初始化ID限制下拉框
+            if cmbIDLimit != undefined then (
+                cmbIDLimit.Items.Clear()
+                local idLimits = #(4, 8, 12, 20)
+                for limit in idLimits do (
+                    cmbIDLimit.Items.Add (limit as string)
+                )
+                cmbIDLimit.SelectedIndex = 2
+                cmbIDLimit.DropDownStyle = cmbIDLimit.DropDownStyle.DropDownList
+            )
+            
+            return true
+        ) catch (
+            messageBox ("初始化UI失败: " + (getCurrentException())) title:"错误"
+            return false
         )
-        catch (
-            messageBox ("初始化界面时发生错误：" + (getCurrentException())) title:"错误"
+    )
+
+    -- 打开事件处理
+    on replaceMissingMapsRollout open do (
+        if not initializeUI() then (
+            try(destroyDialog replaceMissingMapsRollout)catch()
         )
     )
 
@@ -1963,7 +2409,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         local endTime = timestamp()
         local elapsedTime = (endTime - startTime) / 1000.0
         
-        -- 生成日志信息
+        -- 生成日志信
         local logMessage = "------------------------ \r\n"
         logMessage += "材质命名完成\r\n"
         logMessage += "成功处理材质数: " + processedCount as string + "\r\n"
@@ -1989,6 +2435,201 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         )
         
         setMaterial()
+    )
+
+    -- 添加超链接
+    hyperLink lnkGithub "Github仓库.使用说明" pos:[520,390] width:120 height:20 address:"https://github.com/Rkesent/3DMAX_Integrated-plugins" color:(color 100 149 237)
+    
+    -- 添加超链接点击事件
+    on lnkGithub clicked do
+    (
+        try (
+            shellLaunch lnkGithub.address ""
+        ) catch (
+            messageBox "无法打开链接;请检查网络链接" title:"错误"
+        )
+    )
+
+    -- 添加获取最近2的幂次方数的函数
+    fn getNearestPowerOfTwo n = (
+        if n <= 0 then return 1
+        local power = 1
+        while power < n do power *= 2
+        -- 检查哪个2的幂次方更接近
+        local lowerPower = power / 2
+        if (n - lowerPower) < (power - n) then
+            return lowerPower
+        return power
+    )
+
+    -- 修改贴图修复函数
+    fn fixTextureSize oldPath = (
+        try (
+            -- 加载GDI+类
+            local gdiPlus = dotNetClass "System.Drawing.Imaging.ImageFormat"
+            local bitmap = dotNetClass "System.Drawing.Bitmap"
+            local graphics = dotNetClass "System.Drawing.Graphics"
+            
+            -- 加载原始图像
+            local img = bitmap.FromFile oldPath
+            if img == undefined then return #(false, "无法打开贴图")
+            
+            -- 获取尺寸
+            local w = img.Width
+            local h = img.Height
+            
+            -- 计算新的尺寸
+            local newW = getNearestPowerOfTwo w
+            local newH = getNearestPowerOfTwo h
+            
+            -- 如果尺寸已经是2的幂次方，则不需要处理
+            if w == newW and h == newH then (
+                img.Dispose()
+                return #(true, "尺寸已符合要求")
+            )
+            
+            -- 创建临时文件名
+            local fileDir = getFilenamePath oldPath
+            local fileName = getFilenameFile oldPath
+            local fileExt = getFilenameType oldPath
+            local tempPath = fileDir + fileName + "_temp" + fileExt
+            
+            -- 创建新图像
+            local newImg = dotNetObject "System.Drawing.Bitmap" newW newH
+            local g = graphics.FromImage newImg
+            
+            -- 设置插值模式为高质量
+            g.InterpolationMode = (dotNetClass "System.Drawing.Drawing2D.InterpolationMode").HighQualityBicubic
+            g.SmoothingMode = (dotNetClass "System.Drawing.Drawing2D.SmoothingMode").HighQuality
+            
+            -- 绘制调整后的图像
+            local destRect = dotNetObject "System.Drawing.Rectangle" 0 0 newW newH
+            g.DrawImage img destRect
+            
+            -- 保存新图像
+            case toLower fileExt of (
+                ".jpg": newImg.Save tempPath gdiPlus.Jpeg
+                ".jpeg": newImg.Save tempPath gdiPlus.Jpeg
+                ".png": newImg.Save tempPath gdiPlus.Png
+                ".tga": newImg.Save tempPath gdiPlus.Tiff
+                default: newImg.Save tempPath gdiPlus.Png
+            )
+            
+            -- 清理资源
+            g.Dispose()
+            newImg.Dispose()
+            img.Dispose()
+            
+            -- 替换原文件
+            if doesFileExist tempPath then (
+                deleteFile oldPath
+                renameFile tempPath oldPath
+            )
+            
+            return #(true, "已修改为 " + newW as string + "x" + newH as string)
+        ) catch (
+            local errMsg = getCurrentException()
+            format "修复贴图出错: %\n" errMsg
+            return #(false, "修复失败")
+        )
+    )
+
+    -- 在UI中添加修复按钮
+    
+
+    -- 添加修复按钮事件处理
+    on btnFixTextures pressed do (
+        if lvModels.Items.Count == 0 then (
+            messageBox "请先执行贴图检查！" title:"提示"
+            return undefined
+        )
+        
+        try (
+            local startTime = timestamp()
+            local fixedCount = 0
+            local errorCount = 0
+            local processedFiles = #()
+            
+            -- 获取选中的项目，如果没有选中则处理所有项目
+            local itemsToProcess = if lvModels.SelectedItems.Count > 0 then (
+                for i = 0 to lvModels.SelectedItems.Count - 1 collect lvModels.SelectedItems.Item[i]
+            ) else (
+                for i = 0 to lvModels.Items.Count - 1 collect lvModels.Items.Item[i]
+            )
+            
+            with redraw off (
+                for item in itemsToProcess do (
+                    local objName = item.Text
+                    local matName = item.SubItems.Item[1].Text
+                    local fileName = item.SubItems.Item[3].Text
+                    
+                    -- 获取对象
+                    local obj = getNodeByName objName
+                    if obj != undefined and obj.material != undefined then (
+                        -- 获取贴图路径
+                        local texturePath = undefined
+                        if classof obj.material == MultiMaterial then (
+                            local matID = try(item.SubItems.Item[2].Text as integer)catch(1)
+                            if matID > 0 and matID <= obj.material.numsubs then (
+                                local subMat = obj.material[matID]
+                                if subMat != undefined then (
+                                    texturePath = case classof subMat of (
+                                        StandardMaterial: if subMat.diffuseMap != undefined then subMat.diffuseMap.filename else undefined
+                                        VRayMtl: if subMat.texmap_diffuse != undefined then subMat.texmap_diffuse.filename else undefined
+                                        PhysicalMaterial: if subMat.base_color_map != undefined then subMat.base_color_map.filename else undefined
+                                        default: undefined
+                                    )
+                                )
+                            )
+                        ) else (
+                            texturePath = case classof obj.material of (
+                                StandardMaterial: if obj.material.diffuseMap != undefined then obj.material.diffuseMap.filename else undefined
+                                VRayMtl: if obj.material.texmap_diffuse != undefined then obj.material.texmap_diffuse.filename else undefined
+                                PhysicalMaterial: if obj.material.base_color_map != undefined then obj.material.base_color_map.filename else undefined
+                                default: undefined
+                            )
+                        )
+                        
+                        -- 如果找到贴图路径且文件存在
+                        if texturePath != undefined and doesFileExist texturePath then (
+                            -- 检查是否已处理过该文件
+                            if findItem processedFiles texturePath == 0 then (
+                                append processedFiles texturePath
+                                local result = fixTextureSize texturePath
+                                if result[1] then (
+                                    fixedCount += 1
+                                    item.SubItems.Item[4].Text = result[2]
+                                ) else (
+                                    errorCount += 1
+                                    item.SubItems.Item[4].Text = "修复失败: " + result[2]
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+            
+            local endTime = timestamp()
+            local elapsedTime = (endTime - startTime) / 1000.0
+            
+            -- 生成日志信息
+            local logMessage = "------------------------ \r\n"
+            logMessage += "贴图修复完成\r\n"
+            logMessage += "成功修复: " + fixedCount as string + "张\r\n"
+            if errorCount > 0 then (
+                logMessage += "修复失败: " + errorCount as string + "张\r\n"
+            )
+            logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
+            logMessage += "------------------------ \r\n"
+            
+            insertLog logMessage
+            
+            -- 刷新检查结果
+            if fixedCount > 0 do checkMissingFiles()
+            
+        ) catch (
+            messageBox ("修复贴图时发生错误：" + (getCurrentException())) title:"错误"
+        )
     )
 )
 
@@ -2042,7 +2683,7 @@ fn archiveMapFiles objsToProcess = (
                                     -- 复制文件
                                     if doesFileExist oldPath then (
                                         copyFile oldPath newPath
-                                        -- 更新材质的贴图路径
+                                        -- 更材质的贴图路径
                                         diffuseMap.filename = newPath
                                         append mapPathMapping #(oldPath, newPath)
                                     )
@@ -2185,5 +2826,63 @@ fn processTextureRename obj startNumber fillWidth baseCode cityName projName abb
     ) catch (
         format "处理贴图重命名时出错: %\n" (getCurrentException())
         return #(#(), startNumber)
+    )
+)
+
+-- 添加检查贴图尺寸的函数
+fn isPowerOfTwo n = (
+    if n <= 0 then return false
+    local i = 1
+    while i <= n do (
+        if i == n then return true
+        i *= 2
+    )
+    return false
+)
+
+fn checkTextureSize bmap = (
+    if bmap == undefined then return #(false, "无效贴图")
+    try (
+        -- 确保获取到有效的宽高值
+        local w = bmap.width as integer
+        local h = bmap.height as integer
+        
+        -- 检查是否获取到有效值
+        if w == undefined or h == undefined then (
+            return #(false, "无效尺寸")
+        )
+        
+        -- 检查是否为2的幂次方
+        local isPowerW = false
+        local isPowerH = false
+        local testW = 1
+        local testH = 1
+        
+        -- 检查宽度
+        while testW <= w do (
+            if testW == w then (
+                isPowerW = true
+                exit
+            )
+            testW *= 2
+        )
+        
+        -- 检查高度
+        while testH <= h do (
+            if testH == h then (
+                isPowerH = true
+                exit
+            )
+            testH *= 2
+        )
+        
+        -- 简化错误信息，只显示尺寸
+        if not isPowerW or not isPowerH then (
+            return #(false, w as string + "x" + h as string)
+        )
+        
+        return #(true, w as string + "x" + h as string)
+    ) catch (
+        return #(false, "检查失败")
     )
 )
