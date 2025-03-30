@@ -12,7 +12,7 @@ fn isPowerOfTwo n = (
         while i <= n do (
             if i == n then return true
             i *= 2
-            if i > n then return false
+            if i > n then return false -- 添加这个检查以避免无限循环
         )
         return false
     ) catch (
@@ -22,8 +22,10 @@ fn isPowerOfTwo n = (
 
 fn checkTextureSize bmap = (
     try (
+        -- 首先检查输入参数是否有效
         if bmap == undefined then return #(false, "无效贴图")
         
+        -- 确保获取到有效的宽高值
         local w = undefined
         local h = undefined
         
@@ -34,10 +36,12 @@ fn checkTextureSize bmap = (
             return #(false, "无法获取贴图尺寸")
         )
         
+        -- 检查是否获取到有效值
         if w == undefined or h == undefined or w <= 0 or h <= 0 then (
             return #(false, "无效尺寸")
         )
         
+        -- 检查是否为2的幂次方
         local isPowerW = isPowerOfTwo w
         local isPowerH = isPowerOfTwo h
         
@@ -175,16 +179,15 @@ fn renameModels baseCode cityName projName abbrName startNum fillCount objsToPro
     local duplicateNames = #()
     
     try (
-        -- 验证输入参数
-        if baseCode == undefined or cityName == undefined or projName == undefined or 
-           abbrName == undefined or startNum == undefined or fillCount == undefined then (
-            format "参数无效\n" to:errorLog
+        -- 验证输入参数 - 如果部分参数为空也允许继续
+        if startNum == undefined or fillCount == undefined then (
+            format "序号参数无效\n" to:errorLog
             return #(0, 1, errorLog as string)
         )
         
         -- 验证对象数组
         if objsToProcess == undefined or objsToProcess.count == 0 then (
-            format "没有要清理的对象\n" to:errorLog
+            format "没有要处理的对象\n" to:errorLog
             return #(0, 1, errorLog as string)
         )
         
@@ -196,7 +199,19 @@ fn renameModels baseCode cityName projName abbrName startNum fillCount objsToPro
         for obj in objsToProcess do (
             if obj != undefined and isValidNode obj then (
                 local numStr = formatNumberWithLeadingZeros currentNum fillCount
-                local newName = baseCode + "_" + cityName + "_" + projName + "_" + abbrName + "_" + numStr
+                -- 使用数组收集非空部分，然后用下划线连接
+                local nameParts = #()
+                if baseCode != "" then append nameParts baseCode
+                if cityName != "" then append nameParts cityName
+                if projName != "" then append nameParts projName
+                if abbrName != "" then append nameParts abbrName
+                append nameParts numStr
+                
+                -- 用下划线连接所有部分
+                local newName = nameParts[1]
+                for i = 2 to nameParts.count do (
+                    newName += "_" + nameParts[i]
+                )
                 
                 -- 检查名称是否已存在
                 if findItem proposedNames newName > 0 then (
@@ -223,7 +238,19 @@ fn renameModels baseCode cityName projName abbrName startNum fillCount objsToPro
                 if obj != undefined and isValidNode obj then (
                     -- 生成新名称
                     local numStr = formatNumberWithLeadingZeros currentNum fillCount
-                    local newName = baseCode + "_" + cityName + "_" + projName + "_" + abbrName + "_" + numStr
+                    -- 使用数组收集非空部分，然后用下划线连接
+                    local nameParts = #()
+                    if baseCode != "" then append nameParts baseCode
+                    if cityName != "" then append nameParts cityName
+                    if projName != "" then append nameParts projName
+                    if abbrName != "" then append nameParts abbrName
+                    append nameParts numStr
+                    
+                    -- 用下划线连接所有部分
+                    local newName = nameParts[1]
+                    for i = 2 to nameParts.count do (
+                        newName += "_" + nameParts[i]
+                    )
                     
                     -- 保存旧名称用于错误报告
                     local oldName = obj.name
@@ -659,7 +686,7 @@ fn endListViewUpdate lv = (
 )
 
 -- 创建UI
-rollout replaceMissingMapsRollout "快速贴图替换"
+rollout replaceMissingMapsRollout "后处理工具集合-v1.3"
 (
     -- 主列表视图
     dotNetControl lvModels "System.Windows.Forms.ListView" pos:[10,10] width:400 height:300
@@ -672,27 +699,35 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     groupBox grpLog "操作日志" pos:[420,170] width:200 height:140
     dotNetControl edtLog "System.Windows.Forms.RichTextBox" pos:[430,190] width:180 height:110
 
+    -- 新增折叠区域按钮
+    button btnCollapsible "高级选项 ▼" pos:[400,380] width:100 height:30 tooltip:"点击展开或折叠高级选项区域（此功能暂未完善）"
+    
+    -- 可折叠区域
+    groupBox grpCollapsible "高级选项" pos:[10,430] width:610 height:100 visible:false
+    -- 在可折叠区域中添加一些控件
+    button btnAdvanced1 "贴图名称历史记录" pos:[20,450] width:150 height:30 visible:false tooltip:"查看贴图重命名历史记录，可以撤销重命名操作"
+    
     -- ID限制下拉框和标签
     label lblIDLimit "ID限制:" pos:[335,370] width:50 height:20
     dotNetControl cmbIDLimit "System.Windows.Forms.ComboBox" pos:[330,390] width:60 height:40
     
     -- 添加贴图大小检测单选框
-    checkbox chkMapSizeCheck "贴图大小检测" pos:[335,320] width:90 height:20 checked:false
+    checkbox chkMapSizeCheck "贴图大小检测" pos:[335,320] width:90 height:20 checked:false tooltip:"勾选此项启用对贴图尺寸的检测，查找非2次幂尺寸的贴图"
 
     -- 添加修复贴图尺寸按钮
-    button btnFixTextures "修复贴图尺寸" pos:[335,340] width:100 height:20
+    button btnFixTextures "修复贴图尺寸" pos:[335,340] width:100 height:20 tooltip:"尝试修复非2次幂尺寸的贴图"
     
     -- 按钮
-    button btnCheck "检查" pos:[10,320] width:100 height:40
-    button btnReplace "替换" pos:[120,320] width:100 height:40
-    button btnChangePath "更换贴图路径" pos:[230,320] width:100 height:40
-    button btnClearLog "清除日志" pos:[470,320] width:100 height:40
+    button btnCheck "检查" pos:[10,320] width:100 height:40 tooltip:"检查场景中丢失的贴图和非2次幂尺寸的贴图"
+    button btnReplace "替换" pos:[120,320] width:100 height:40 tooltip:"替换选中项或所有丢失的贴图"
+    button btnChangePath "更换贴图路径" pos:[230,320] width:100 height:40 tooltip:"更新贴图路径，左键点击更新丢失贴图，右键点击更新所有贴图"
+    button btnClearLog "清除日志" pos:[470,320] width:100 height:40 tooltip:"清空操作日志"
     
     -- 新增按钮
-    button btnConvertToStandard "转化为标准材质" pos:[10,370] width:100 height:20
-    button btnConvertToVR "转化VR材质" pos:[10,390] width:100 height:20
-    button btnRename "重命名" pos:[120,370] width:100 height:40
-    button btnCheckModelID "模型ID数检查" pos:[230,370] width:100 height:40
+    button btnConvertToStandard "转化为标准材质" pos:[10,370] width:100 height:20 tooltip:"将场景中的材质转换为标准材质"
+    button btnConvertToVR "转化VR材质" pos:[10,390] width:100 height:20 tooltip:"将场景中的材质转换为VRay材质"
+    button btnRename "重命名" pos:[120,370] width:100 height:40 tooltip:"打开重命名工具，可对模型和贴图进行批量重命名"
+    button btnCheckModelID "模型ID数检查" pos:[230,370] width:100 height:40 tooltip:"检查模型的材质ID数量是否超过限制"
     -- button btn_namemat "贴图命名材质" width:100 height:40 pos:[340,320]
 
     -- 添加函数声明
@@ -702,6 +737,56 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         (
             edtLog.Select 0 0
             edtLog.SelectedText = message + "\r\n" + edtLog.Text
+        )
+    )
+    
+    -- 折叠区域相关变量和函数
+    local isCollapsibleVisible = false
+    local dialogHeight = 420 -- 默认高度
+    local expandedHeight = 550 -- 展开后的高度
+    
+    -- 展开或折叠区域的函数
+    fn toggleCollapsibleArea = (
+        isCollapsibleVisible = not isCollapsibleVisible
+        
+        -- 更新按钮文本
+        btnCollapsible.text = if isCollapsibleVisible then "高级选项 ▲" else "高级选项 ▼"
+        
+        -- 更新控件可见性
+        grpCollapsible.visible = isCollapsibleVisible
+        btnAdvanced1.visible = isCollapsibleVisible
+        
+        -- 调整对话框高度
+        local newHeight = if isCollapsibleVisible then expandedHeight else dialogHeight
+        try(
+            replaceMissingMapsRollout.height = newHeight
+        )catch()
+    )
+    
+    -- 折叠区域按钮点击事件
+    on btnCollapsible pressed do (
+        toggleCollapsibleArea()
+    )
+    
+    -- 贴图名称历史记录按钮事件
+    on btnAdvanced1 pressed do (
+        try (
+            -- 弹出文件选择对话框，选择Python脚本
+            local pythonFile = getOpenFileName caption:"选择贴图重命名记录Python脚本" types:"Python脚本 (*.py)|*.py|所有文件 (*.*)|*.*|"
+            if pythonFile != undefined then (
+                -- 执行Python脚本
+                python.ExecuteFile pythonFile
+            ) else (
+                -- 如果没有选择文件，但仍想运行默认脚本
+                local defaultScriptPath = (getDir #scripts) + "\\TextureRenameHistory.py"
+                if doesFileExist defaultScriptPath then (
+                    python.ExecuteFile defaultScriptPath
+                ) else (
+                    messageBox "默认贴图重命名记录脚本不存在，请先创建或选择脚本文件。" title:"提示"
+                )
+            )
+        ) catch (
+            messageBox ("执行Python脚本时发生错误：" + (getCurrentException())) title:"错误"
         )
     )
 
@@ -1768,25 +1853,33 @@ rollout replaceMissingMapsRollout "快速贴图替换"
     )
 
     -- 添加重命名弹窗rollout
-    rollout renameRollout "重命名工具" width:550 height:250
+    rollout renameRollout "重命名工具" width:550 height:450
     (
         local closeTimer = undefined
+        -- 用于存储排除的贴图路径
+        local excludedTextures = #()
+        -- 用于存储场景中所有贴图的路径
+        local allTextures = #()
         
         -- 添加计时器创建函数
         fn createCloseTimer = (
             try (
                 local timer = dotNetObject "System.Windows.Forms.Timer"
                 timer.Interval = 1000 -- 1秒
-                -- 修改 Tick 为正确的大小写
-                timer.add_Tick (dotNetObject "System.EventHandler" timer (
-                    fn timerCallback sender args = (
-                        try(
-                            sender.Stop()
-                            destroyDialog renameRollout
-                            sender.Dispose()
-                        )catch()
-                    )
+                
+                -- 创建委托和事件处理
+                local callback = dotNetClass "System.EventHandler"
+                local timerCallback = dotNetObject callback timer (fn timerCallback sender args = (
+                    try(
+                        sender.Stop()
+                        destroyDialog renameRollout
+                        sender.Dispose()
+                    )catch()
                 ))
+                
+                -- 使用委托添加事件处理
+                timer.add_Tick timerCallback
+                
                 return timer
             ) catch (
                 format "创建计时器失败: %\n" (getCurrentException())
@@ -1811,17 +1904,17 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         label lbl5 "起始位" pos:[340,35] width:40 height:20 textColor:labelColor
         
         -- 模型命名输入框行
-        editText base1 "" pos:[20,55] width:60 height:20 text:"SM" align:#center
-        editText city1 "" pos:[100,55] width:60 height:20 align:#center
-        editText proj1 "" pos:[180,55] width:60 height:20 align:#center
-        editText abbr1 "" pos:[260,55] width:60 height:20 align:#center
-        spinner start1 "" pos:[340,55] width:40 height:30 range:[0,999,1] type:#integer scale:1
+        editText base1 "" pos:[20,55] width:60 height:20 text:"SM" align:#center tooltip:"模型名称的基础代号(如SM代表静态模型)"
+        editText city1 "" pos:[100,55] width:60 height:20 align:#center tooltip:"模型所属城市的简称"
+        editText proj1 "" pos:[180,55] width:60 height:20 align:#center tooltip:"项目名称的简写"
+        editText abbr1 "" pos:[260,55] width:60 height:20 align:#center tooltip:"创建者姓名的缩写"
+        spinner start1 "" pos:[340,55] width:40 height:30 range:[0,999,1] type:#integer scale:1 tooltip:"重命名起始序号"
         
         -- 选择和填充位
-        radioButtons rad1 "" pos:[20,80] width:150 height:20 labels:#("选择", "全部") columns:2
+        radioButtons rad1 "" pos:[20,83] width:150 height:20 labels:#("选择", "全部") columns:2 tooltip:"选择重命名模式：仅选中的模型或全部模型"
         label fill1 "填充位:" pos:[300,80] width:40 height:20 textColor:labelColor
-        spinner fillNum1 "" pos:[340,80] width:40 height:30 range:[0,10,3] type:#integer scale:1
-        checkbox chk_enableRename "启用模型命名" pos:[160,80] width:90 height:20
+        spinner fillNum1 "" pos:[340,80] width:40 height:30 range:[0,10,3] type:#integer scale:1 tooltip:"序号的填充位数，如001表示3位"
+        checkbox chk_enableRename "启用模型命名" pos:[120,80] width:90 height:20 tooltip:"勾选此项启用模型重命名功能"
         
         -- 贴图命名组
         GroupBox grp2 "贴图命名" pos:[10,120] width:400 height:100    
@@ -1837,41 +1930,279 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         label lbl10 "起始位" pos:[340,145] width:40 height:20 textColor:labelColor
         
         -- 贴图命名输入框行
-        editText base2 "" pos:[20,165] width:60 height:20 text:"T" align:#center
-        editText city2 "" pos:[100,165] width:60 height:20 align:#center
-        editText proj2 "" pos:[180,165] width:60 height:20 align:#center
-        editText abbr2 "" pos:[260,165] width:60 height:20 align:#center
-        spinner start2 "" pos:[340,165] width:40 height:30 range:[0,999,1] type:#integer scale:1
+        editText base2 "" pos:[20,165] width:60 height:20 text:"T" align:#center tooltip:"贴图名称的基础代号(如T代表贴图)"
+        editText city2 "" pos:[100,165] width:60 height:20 align:#center tooltip:"贴图所属城市的简称"
+        editText proj2 "" pos:[180,165] width:60 height:20 align:#center tooltip:"项目名称的简写"
+        editText abbr2 "" pos:[260,165] width:60 height:20 align:#center tooltip:"创建者姓名的缩写"
+        spinner start2 "" pos:[340,165] width:40 height:30 range:[0,999,1] type:#integer scale:1 tooltip:"重命名起始序号"
         
         -- 选择和填充位
-        radioButtons rad2 "" pos:[20,190] width:150 height:20 labels:#("选择", "全部") columns:2
+        radioButtons rad2 "" pos:[20,193] width:150 height:20 labels:#("选择", "全部") columns:2 tooltip:"选择重命名模式：仅选中模型的贴图或全部贴图"
         label fill2 "填充位:" pos:[300,190] width:40 height:20 textColor:labelColor
-        spinner fillNum2 "" pos:[340,190] width:40 height:30 range:[0,10,3] type:#integer scale:1
-        checkbox chk_enableTextureRename "启用贴图命名" pos:[160,190] width:90 height:20 checked:false
+        spinner fillNum2 "" pos:[340,190] width:40 height:30 range:[0,10,3] type:#integer scale:1 tooltip:"序号的填充位数，如001表示3位"
+        checkbox chk_enableTextureRename "启用贴图命名" pos:[120,190] width:90 height:20 checked:false tooltip:"勾选此项启用贴图重命名功能"
+        
+        -- 贴图排除功能组 (新增)
+        GroupBox grpExclude "贴图排除" pos:[10,230] width:530 height:200
+        
+        -- 场景贴图列表 (左侧)
+        label lblAllTextures "场景贴图:" pos:[20,250] width:80 height:20 textColor:labelColor
+        listbox lbAllTextures "" pos:[20,270] width:220 height:10 tooltip:"场景中所有贴图"
+        
+        -- 排除贴图列表 (右侧)
+        label lblExcludedTextures "排除贴图:" pos:[310,250] width:80 height:20 textColor:labelColor
+        listbox lbExcludedTextures "" pos:[310,270] width:220 height:10 tooltip:"这些贴图将不会被重命名"
+        
+        -- 操作按钮
+        button btnExclude ">>" pos:[250,290] width:50 height:25 tooltip:"将选中的贴图添加到排除列表"
+        button btnInclude "<<" pos:[250,330] width:50 height:25 tooltip:"将选中的贴图从排除列表中移除"
+        button btnRefreshTextures "刷新贴图列表" pos:[220,400] width:100 height:25 tooltip:"刷新场景中的贴图列表"
         
         -- 底部按钮
-        button renameBtn "重命名" pos:[420,15] width:120 height:30
-        button useTextureBtn "将贴图名称作为材质名称" pos:[420,50] width:120 height:40
-        checkBox chkArchive "将贴图归档" pos:[440,90] width:80 height:20
-
+        button renameBtn "开始" pos:[420,15] width:120 height:30 tooltip:"执行勾选模块的功能"
+        button useTextureBtn "将贴图名称作为材质名称" pos:[420,50] width:120 height:40 tooltip:"根据贴图名称自动设置材质名称"
+        checkBox chkArchive "将贴图归档" pos:[440,90] width:80 height:20 tooltip:"勾选后会将贴图复制到场景文件同级目录下的maps文件夹中"
+        checkBox chkAllowEmpty "允许空输入" pos:[440,110] width:80 height:20 tooltip:"勾选后允许某些输入框为空，重命名时将忽略空输入框"
+        
+        -- 获取场景中所有贴图路径的函数
+        fn collectSceneTextures = (
+            local result = #()
+            local processed = #()
+            
+            for mat in sceneMaterials do (
+                if classof mat == Multimaterial then (
+                    -- 处理多重材质
+                    for i = 1 to mat.numsubs do (
+                        local subMat = mat[i]
+                        if subMat != undefined then (
+                            local diffuseMap = case classof subMat of (
+                                StandardMaterial: subMat.diffuseMap
+                                VRayMtl: subMat.texmap_diffuse
+                                PhysicalMaterial: subMat.base_color_map
+                                default: undefined
+                            )
+                            
+                            if diffuseMap != undefined and diffuseMap.filename != undefined and diffuseMap.filename != "" then (
+                                if findItem processed diffuseMap.filename == 0 then (
+                                    append processed diffuseMap.filename
+                                    append result diffuseMap.filename
+                                )
+                            )
+                        )
+                    )
+                ) else (
+                    -- 处理单一材质
+                    local diffuseMap = case classof mat of (
+                        StandardMaterial: mat.diffuseMap
+                        VRayMtl: mat.texmap_diffuse
+                        PhysicalMaterial: mat.base_color_map
+                        default: undefined
+                    )
+                    
+                    if diffuseMap != undefined and diffuseMap.filename != undefined and diffuseMap.filename != "" then (
+                        if findItem processed diffuseMap.filename == 0 then (
+                            append processed diffuseMap.filename
+                            append result diffuseMap.filename
+                        )
+                    )
+                )
+            )
+            
+            return result
+        )
+        
+        -- 更新贴图列表显示
+        fn updateTextureListsDisplay = (
+            -- 清空列表
+            lbAllTextures.items = #()
+            lbExcludedTextures.items = #()
+            
+            -- 添加非排除贴图到左侧列表
+            for texPath in allTextures do (
+                if findItem excludedTextures texPath == 0 then (
+                    -- 只显示文件名，不显示完整路径
+                    local texName = filenameFromPath texPath
+                    lbAllTextures.items = append lbAllTextures.items texName
+                )
+            )
+            
+            -- 添加排除贴图到右侧列表
+            for texPath in excludedTextures do (
+                -- 只显示文件名，不显示完整路径
+                local texName = filenameFromPath texPath
+                lbExcludedTextures.items = append lbExcludedTextures.items texName
+            )
+        )
+        
+        -- 获取选中贴图的完整路径
+        fn getSelectedTexturePath fromList selectedIndex = (
+            local textures = if fromList == lbAllTextures then (
+                for texPath in allTextures where findItem excludedTextures texPath == 0 collect texPath
+            ) else (
+                excludedTextures
+            )
+            
+            if selectedIndex > 0 and selectedIndex <= textures.count then (
+                return textures[selectedIndex]
+            )
+            
+            return undefined
+        )
+        
+        -- 初始化
+        on renameRollout open do (
+            -- 收集场景中的所有贴图
+            allTextures = collectSceneTextures()
+            
+            -- 更新列表显示
+            updateTextureListsDisplay()
+        )
+        
+        -- 刷新贴图列表按钮事件
+        on btnRefreshTextures pressed do (
+            -- 重新收集场景中的所有贴图
+            allTextures = collectSceneTextures()
+            
+            -- 清理排除列表中不存在的贴图
+            excludedTextures = for texPath in excludedTextures where findItem allTextures texPath > 0 collect texPath
+            
+            -- 更新列表显示
+            updateTextureListsDisplay()
+        )
+        
+        -- 排除贴图按钮事件
+        on btnExclude pressed do (
+            local selectedIndex = lbAllTextures.selection
+            if selectedIndex > 0 then (
+                local texPath = getSelectedTexturePath lbAllTextures selectedIndex
+                if texPath != undefined and findItem excludedTextures texPath == 0 then (
+                    append excludedTextures texPath
+                    updateTextureListsDisplay()
+                )
+            )
+        )
+        
+        -- 取消排除按钮事件
+        on btnInclude pressed do (
+            local selectedIndex = lbExcludedTextures.selection
+            if selectedIndex > 0 then (
+                local texPath = getSelectedTexturePath lbExcludedTextures selectedIndex
+                if texPath != undefined and findItem excludedTextures texPath > 0 then (
+                    excludedTextures = for p in excludedTextures where p != texPath collect p
+                    updateTextureListsDisplay()
+                )
+            )
+        )
+        
         -- 重命名按钮事件
         on renameBtn pressed do (
             try (
                 local hasValidOperation = false
                 
-                -- 贴图重命名功能
-                if chk_enableTextureRename.checked then (
-                    -- 检查必填字段是否为空
-                    if base2.text != "" and city2.text != "" and proj2.text != "" and abbr2.text != "" then (
+                -- 模型重命名功能
+                if chk_enableRename.checked then (
+                    -- 检查必填字段
+                    local fieldsValid = true
+                    
+                    if not chkAllowEmpty.checked then (
+                        -- 如果不允许空输入框，检查所有字段是否都已填写
+                        if base1.text == "" or city1.text == "" or proj1.text == "" or abbr1.text == "" then (
+                            fieldsValid = false
+                        )
+                    ) else (
+                        -- 如果允许空输入框，检查是否至少有一个字段填写了值
+                        if base1.text == "" and city1.text == "" and proj1.text == "" and abbr1.text == "" then (
+                            fieldsValid = false
+                        )
+                    )
+                    
+                    if fieldsValid then (
                         hasValidOperation = true
                         local startTime = timestamp()
                         local processedCount = 0
                         
                         -- 获取输入值并确保它们都有效
-                        local baseCode = base2.text
-                        local cityName = city2.text
-                        local projName = proj2.text
-                        local abbrName = abbr2.text
+                        local baseCode = if base1.text != "" then base1.text else ""
+                        local cityName = if city1.text != "" then city1.text + "_" else ""
+                        local projName = if proj1.text != "" then proj1.text + "_" else ""
+                        local abbrName = if abbr1.text != "" then abbr1.text + "_" else ""
+                        local startNumber = try(start1.value as integer)catch(1)
+                        local fillWidth = try(fillNum1.value as integer)catch(3)
+                        
+                        -- 获取要处理的对象数组
+                        local objsToProcess = #()
+                        if rad1.state == 1 then (
+                            objsToProcess = selection as array
+                            if objsToProcess.count == 0 then (
+                                messageBox "请先选择要处理的对象！" title:"提示"
+                                return undefined
+                            )
+                        ) else (
+                            for obj in geometry where not obj.isHidden do (
+                                append objsToProcess obj
+                            )
+                        )
+                        
+                        -- 执行模型重命名
+                        local result = renameModels baseCode cityName projName abbrName startNumber fillWidth objsToProcess
+                        processedCount = result[1]
+                        
+                        local endTime = timestamp()
+                        local elapsedTime = (endTime - startTime) / 1000.0
+                        
+                        -- 生成日志信息
+                        local logMessage = "------------------------ \r\n"
+                        logMessage += "模型重命名完成\r\n"
+                        logMessage += "处理模型数: " + processedCount as string + "\r\n"
+                        if result[2] > 0 then (
+                            logMessage += "错误数量: " + result[2] as string + "\r\n"
+                            logMessage += "错误信息: " + result[3] + "\r\n"
+                        )
+                        logMessage += "起始序号: " + startNumber as string + "\r\n"
+                        logMessage += "填充位数: " + fillWidth as string + "\r\n"
+                        logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
+                        logMessage += "------------------------ \r\n"
+                        
+                        insertLog logMessage
+                    )
+                    else (
+                        if not chkAllowEmpty.checked then (
+                            messageBox "请填写所有模型命名相关的字段！" title:"提示"
+                        ) else (
+                            messageBox "请至少填写一个模型命名相关的字段！" title:"提示"
+                        )
+                        return undefined
+                    )
+                )
+                
+                -- 贴图重命名功能
+                if chk_enableTextureRename.checked then (
+                    -- 检查必填字段
+                    local fieldsValid = true
+                    
+                    if not chkAllowEmpty.checked then (
+                        -- 如果不允许空输入框，检查所有字段是否都已填写
+                        if base2.text == "" or city2.text == "" or proj2.text == "" or abbr2.text == "" then (
+                            fieldsValid = false
+                        )
+                    ) else (
+                        -- 如果允许空输入框，检查是否至少有一个字段填写了值
+                        if base2.text == "" and city2.text == "" and proj2.text == "" and abbr2.text == "" then (
+                            fieldsValid = false
+                        )
+                    )
+                    
+                    if fieldsValid then (
+                        hasValidOperation = true
+                        local startTime = timestamp()
+                        local processedCount = 0
+                        local skippedCount = 0
+                        
+                        -- 获取输入值并确保它们都有效
+                        local baseCode = if base2.text != "" then base2.text else ""
+                        local cityName = if city2.text != "" then city2.text else ""
+                        local projName = if proj2.text != "" then proj2.text else ""
+                        local abbrName = if abbr2.text != "" then abbr2.text else ""
                         local startNumber = try(start2.value as integer)catch(1)
                         local fillWidth = try(fillNum2.value as integer)catch(3)
                         
@@ -1897,13 +2228,34 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                         -- 生成重命名映射
                         for info in textureInfo do (
                             local oldPath = info[1]
+                            
+                            -- 检查贴图是否在排除列表中
+                            if findItem excludedTextures oldPath > 0 then (
+                                skippedCount += 1
+                                continue -- 跳过此贴图
+                            )
+                            
                             if doesFileExist oldPath then (
                                 -- 生成新的贴图名称
                                 local fileDir = getFilenamePath oldPath
                                 local fileExt = getFilenameType oldPath
                                 local numStr = formatNumberWithLeadingZeros currentNumber fillWidth
-                                local newFileName = baseCode + "_" + cityName + "_" + projName + "_" + abbrName + "_" + numStr + fileExt
-                                local newPath = fileDir + newFileName
+                                
+                                -- 使用数组收集非空部分，然后用下划线连接
+                                local nameParts = #()
+                                if baseCode != "" then append nameParts baseCode
+                                if cityName != "" then append nameParts cityName
+                                if projName != "" then append nameParts projName
+                                if abbrName != "" then append nameParts abbrName
+                                append nameParts numStr
+                                
+                                -- 用下划线连接所有部分
+                                local newFileName = nameParts[1]
+                                for i = 2 to nameParts.count do (
+                                    newFileName += "_" + nameParts[i]
+                                )
+                                
+                                local newPath = fileDir + newFileName + fileExt
                                 
                                 append renameMappings #(oldPath, newPath, info[2])
                                 currentNumber += 1
@@ -1938,6 +2290,41 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                                         )
                                     )
                                     
+                                    -- 更新场景中所有使用该贴图的材质
+                                    for mat in scenematerials do (
+                                        -- 检查单一材质
+                                        if classof mat != MultiMaterial then (
+                                            local diffuseMap = case classof mat of (
+                                                StandardMaterial: mat.diffuseMap
+                                                VRayMtl: mat.texmap_diffuse
+                                                PhysicalMaterial: mat.base_color_map
+                                                default: undefined
+                                            )
+                                            
+                                            if diffuseMap != undefined and diffuseMap.filename == oldPath then (
+                                                diffuseMap.filename = newPath
+                                            )
+                                        )
+                                        -- 检查多重材质
+                                        else if classof mat == MultiMaterial then (
+                                            for i = 1 to mat.numsubs do (
+                                                local subMat = mat[i]
+                                                if subMat != undefined then (
+                                                    local diffuseMap = case classof subMat of (
+                                                        StandardMaterial: subMat.diffuseMap
+                                                        VRayMtl: subMat.texmap_diffuse
+                                                        PhysicalMaterial: subMat.base_color_map
+                                                        default: undefined
+                                                    )
+                                                    
+                                                    if diffuseMap != undefined and diffuseMap.filename == oldPath then (
+                                                        diffuseMap.filename = newPath
+                                                    )
+                                                )
+                                            )
+                                        )
+                                    )
+                                    
                                     processedCount += 1
                                 )
                             ) catch (
@@ -1953,6 +2340,7 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                         local logMessage = "------------------------ \r\n"
                         logMessage += "贴图重命名完成\r\n"
                         logMessage += "处理贴图数: " + processedCount as string + "\r\n"
+                        if skippedCount > 0 then logMessage += "跳过贴图数(已排除): " + skippedCount as string + "\r\n"
                         logMessage += "起始序号: " + startNumber as string + "\r\n"
                         logMessage += "填充位数: " + fillWidth as string + "\r\n"
                         logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
@@ -1961,14 +2349,62 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                         insertLog logMessage
                     )
                     else (
-                        messageBox "请填写所有贴图命名相关的字段！" title:"提示"
+                        if not chkAllowEmpty.checked then (
+                            messageBox "请填写所有贴图命名相关的字段！" title:"提示"
+                        ) else (
+                            messageBox "请至少填写一个贴图命名相关的字段！" title:"提示"
+                        )
                         return undefined
                     )
                 )
                 
-                -- 如果两个功能都未启用，显示提示
+                -- 贴图归档功能
+                if chkArchive.checked then (
+                    hasValidOperation = true
+                    local startTime = timestamp()
+                    
+                    -- 获取要处理的对象数组
+                    local objsToProcess = #()
+                    -- 如果已经启用了其他重命名功能，使用对应的选择模式
+                    if chk_enableRename.checked and rad1.state == 1 then (
+                        objsToProcess = selection as array
+                    ) else if chk_enableTextureRename.checked and rad2.state == 1 then (
+                        objsToProcess = selection as array
+                    ) else (
+                        -- 否则使用贴图重命名的选择模式
+                        if rad2.state == 1 then (
+                            objsToProcess = selection as array
+                            if objsToProcess.count == 0 then (
+                                messageBox "请先选择要处理的对象！" title:"提示"
+                                return undefined
+                            )
+                        ) else (
+                            for obj in geometry where not obj.isHidden do (
+                                append objsToProcess obj
+                            )
+                        )
+                    )
+                    
+                    -- 执行贴图归档
+                    local result = archiveMapFiles objsToProcess
+                    local processedCount = result.count
+                    
+                    local endTime = timestamp()
+                    local elapsedTime = (endTime - startTime) / 1000.0
+                    
+                    -- 生成日志信息
+                    local logMessage = "------------------------ \r\n"
+                    logMessage += "贴图归档完成\r\n"
+                    logMessage += "处理贴图数: " + processedCount as string + "\r\n"
+                    logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
+                    logMessage += "------------------------ \r\n"
+                    
+                    insertLog logMessage
+                )
+                
+                -- 如果三个功能都未启用，显示提示
                 if not hasValidOperation then (
-                    messageBox "至少启用一个命名功能并填写相关字段！" title:"提示"
+                    messageBox "至少启用一个功能！" title:"提示"
                     return undefined
                 )
                 
@@ -2121,6 +2557,10 @@ rollout replaceMissingMapsRollout "快速贴图替换"
                 cleanupDotNetObject city2
                 cleanupDotNetObject proj2
                 cleanupDotNetObject abbr2
+                
+                -- 清理贴图列表控件
+                cleanupDotNetObject lbAllTextures
+                cleanupDotNetObject lbExcludedTextures
                 
                 -- 清理其他资源
                 cleanupResources()
@@ -2340,6 +2780,18 @@ rollout replaceMissingMapsRollout "快速贴图替换"
         if not initializeUI() then (
             try(destroyDialog replaceMissingMapsRollout)catch()
         )
+        
+        -- 为dotNetControl控件添加工具提示
+        local toolTip = dotNetObject "System.Windows.Forms.ToolTip"
+        toolTip.SetToolTip lvModels "显示场景中丢失贴图或非2次幂尺寸贴图的模型列表"
+        toolTip.SetToolTip edtModelInfo "显示所选模型的详细信息"
+        toolTip.SetToolTip edtLog "显示操作日志"
+        toolTip.SetToolTip cmbIDLimit "选择模型ID数量限制"
+        
+        -- 初始化折叠区域为隐藏状态
+        isCollapsibleVisible = false
+        grpCollapsible.visible = false
+        btnAdvanced1.visible = false
     )
 
     -- 在 replaceMissingMapsRollout rollout 中添加 setMaterial 函数
@@ -2676,6 +3128,24 @@ fn initializeScript = (
         global missingMaps = #()
         global isProcessing = false
         
+        -- 定义注册贴图重命名记录的全局函数
+        global registerTextureRename
+        fn registerTextureRename oldPath newPath = (
+            -- 如果安装了Python，则尝试记录重命名历史
+            if python != undefined then (
+                try (
+                    -- 确保Python脚本目录在路径中
+                    local scriptPath = getDir #scripts
+                    python.Execute ("import sys; sys.path.append('" + scriptPath + "')")
+                    
+                    -- 尝试导入模块并记录重命名
+                    python.Execute ("try:\n    import TextureRenameHistory as trh\n    manager = trh.TextureRenameHistoryManager()\n    manager.add_record('" + oldPath + "', '" + newPath + "')\nexcept Exception as e:\n    print('记录贴图重命名历史出错:', e)")
+                ) catch (
+                    format "记录贴图重命名历史出错: %\n" (getCurrentException())
+                )
+            )
+        )
+        
         -- 返回成功
         return true
     ) catch (
@@ -2687,6 +3157,7 @@ fn initializeScript = (
 -- 主程序入口
 if initializeScript() then (
     try (
+        -- 使用默认高度创建对话框
         createDialog replaceMissingMapsRollout width:640 height:420
     ) catch (
         messageBox ("创建界面时发生错误：" + (getCurrentException())) title:"错误"
@@ -2948,13 +3419,15 @@ fn checkTextureSize bmap = (
 
 -- 添加一个新的辅助函数来一次性收集所有贴图
 fn collectAllTexturePaths objsToProcess = (
-    local textureInfo = #()  -- 存储格式：#(贴图路径, 对象引用数组)
-    local pathToIndex = #()  -- 用于快速查找路径是否已存在
+    local textureInfo = #()
+    local pathToIndex = #()
     
-    for obj in objsToProcess do (
-        if obj.material != undefined then (
+    try (
+        -- 遍历所有对象
+        for obj in objsToProcess where obj != undefined and obj.material != undefined do (
+            -- 处理多重材质
             if classof obj.material == MultiMaterial then (
-                -- 处理多重材质
+                -- 处理多重材质的每个子材质
                 for i = 1 to obj.material.numsubs do (
                     local subMat = obj.material[i]
                     if subMat != undefined then (
@@ -2978,6 +3451,7 @@ fn collectAllTexturePaths objsToProcess = (
                     )
                 )
             ) else (
+                -- 处理单一材质
                 local diffuseMap = case classof obj.material of (
                     StandardMaterial: obj.material.diffuseMap
                     VRayMtl: obj.material.texmap_diffuse
@@ -2997,7 +3471,9 @@ fn collectAllTexturePaths objsToProcess = (
                 )
             )
         )
+    ) catch (
+        format "收集贴图路径时出错: %\n" (getCurrentException())
     )
     
-    textureInfo
+    return textureInfo
 )
