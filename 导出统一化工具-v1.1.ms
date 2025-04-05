@@ -2123,9 +2123,9 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3"
                         
                         -- 获取输入值并确保它们都有效
                         local baseCode = if base1.text != "" then base1.text else ""
-                        local cityName = if city1.text != "" then city1.text + "_" else ""
-                        local projName = if proj1.text != "" then proj1.text + "_" else ""
-                        local abbrName = if abbr1.text != "" then abbr1.text + "_" else ""
+                        local cityName = if city1.text != "" then city1.text else ""
+                        local projName = if proj1.text != "" then proj1.text else ""
+                        local abbrName = if abbr1.text != "" then abbr1.text else ""
                         local startNumber = try(start1.value as integer)catch(1)
                         local fillWidth = try(fillNum1.value as integer)catch(3)
                         
@@ -3318,8 +3318,22 @@ fn processTextureRename obj startNumber fillWidth baseCode cityName projName abb
                                 local fileDir = getFilenamePath oldPath
                                 local fileExt = getFilenameType oldPath
                                 local numStr = formatNumberWithLeadingZeros currentNumber fillWidth
-                                local newFileName = baseCode + "_" + cityName + "_" + projName + "_" + abbrName + "_" + numStr + fileExt
-                                local newPath = fileDir + newFileName
+                                
+                                -- 使用数组收集非空部分，然后用下划线连接
+                                local nameParts = #()
+                                if baseCode != "" then append nameParts baseCode
+                                if cityName != "" then append nameParts cityName
+                                if projName != "" then append nameParts projName
+                                if abbrName != "" then append nameParts abbrName
+                                append nameParts numStr
+                                
+                                -- 用下划线连接所有部分
+                                local newFileName = nameParts[1]
+                                for i = 2 to nameParts.count do (
+                                    newFileName += "_" + nameParts[i]
+                                )
+                                
+                                local newPath = fileDir + newFileName + fileExt
                                 
                                 -- 添加到重命名映射列表
                                 append renameMappings #(oldPath, newPath)
@@ -3346,8 +3360,22 @@ fn processTextureRename obj startNumber fillWidth baseCode cityName projName abb
                         local fileDir = getFilenamePath oldPath
                         local fileExt = getFilenameType oldPath
                         local numStr = formatNumberWithLeadingZeros currentNumber fillWidth
-                        local newFileName = baseCode + "_" + cityName + "_" + projName + "_" + abbrName + "_" + numStr + fileExt
-                        local newPath = fileDir + newFileName
+                        
+                        -- 使用数组收集非空部分，然后用下划线连接
+                        local nameParts = #()
+                        if baseCode != "" then append nameParts baseCode
+                        if cityName != "" then append nameParts cityName
+                        if projName != "" then append nameParts projName
+                        if abbrName != "" then append nameParts abbrName
+                        append nameParts numStr
+                        
+                        -- 用下划线连接所有部分
+                        local newFileName = nameParts[1]
+                        for i = 2 to nameParts.count do (
+                            newFileName += "_" + nameParts[i]
+                        )
+                        
+                        local newPath = fileDir + newFileName + fileExt
                         
                         -- 添加到重命名映射列表
                         append renameMappings #(oldPath, newPath)
