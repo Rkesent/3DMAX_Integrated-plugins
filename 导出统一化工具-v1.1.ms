@@ -3114,6 +3114,22 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3"
             format "清理主窗资源时出错: %\n" (getCurrentException())
         )
     )
+
+    -- 添加窗口打开事件处理
+    on replaceMissingMapsRollout open do (
+        try (
+            -- 初始化UI控件
+            initListView()
+            initModelInfoTextBox()
+            initLogTextBox()
+            initIDLimitComboBox()
+            
+            -- 记录日志
+            insertLog "工具已启动，准备就绪。"
+        ) catch (
+            messageBox ("初始化界面时发生错误：" + (getCurrentException())) title:"错误"
+        )
+    )
 )
 
 -- 添加初始化检查函数
