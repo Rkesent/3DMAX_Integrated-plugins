@@ -787,8 +787,8 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.3" width:640 heigh
     button btnCheckUpdate "检查更新" pos:[20,490] width:100 height:30 visible:false tooltip:"检查插件的最新版本"
     
     -- ID限制下拉框和标签
-    label lblIDLimit "ID限制:" pos:[335,370] width:50 height:20
-    dotNetControl cmbIDLimit "System.Windows.Forms.ComboBox" pos:[330,390] width:60 height:40
+    label lblIDLimit "ID限制:" pos:[335,370] width:50 height:20 tooltip:"设置材质ID的最大数量限制"
+    dotNetControl cmbIDLimit "System.Windows.Forms.ComboBox" pos:[330,390] width:60 height:21
     
     -- 添加贴图大小检测单选框
     checkbox chkMapSizeCheck "贴图大小检测" pos:[335,320] width:90 height:20 checked:false tooltip:"勾选此项启用对贴图尺寸的检测，查找非2次幂尺寸的贴图"
@@ -875,32 +875,30 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.3" width:640 heigh
     )
 
     -- 初始化函数
-    fn initIDLimitComboBox =
-    (
-        try
-        (
-            if cmbIDLimit != undefined then
-            (
+    fn initIDLimitComboBox = (
+        try (
+            if cmbIDLimit != undefined then (
                 cmbIDLimit.Items.Clear()
                 local idLimits = #(4, 8, 12, 20)
-                for limit in idLimits do
+                for limit in idLimits do (
                     cmbIDLimit.Items.Add (limit as string)
-                cmbIDLimit.SelectedIndex = 2
+                )
+                cmbIDLimit.SelectedIndex = 2  -- 默认选择12
                 cmbIDLimit.DropDownStyle = cmbIDLimit.DropDownStyle.DropDownList
                 cmbIDLimit.BackColor = (dotNetClass "System.Drawing.Color").White
                 cmbIDLimit.ForeColor = (dotNetClass "System.Drawing.Color").Black
                 cmbIDLimit.Font = dotNetObject "System.Drawing.Font" "Arial" 9
+                return true
             )
-        )
-        catch
-        (
-            messageBox ("初始化ID限制下拉框时发生错误：" + (getCurrentException())) title:"错误"
+            return false
+        ) catch (
+            format "初始化ID限制下拉框时出错: %\n" (getCurrentException())
+            return false
         )
     )
 
     -- 初始化日志文本框
-    fn initLogTextBox =
-    (
+    fn initLogTextBox = (
         edtLog.Multiline = true
         edtLog.ReadOnly = true
         edtLog.BackColor = (dotNetClass "System.Drawing.Color").LightGray
@@ -910,8 +908,7 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.3" width:640 heigh
     )
 
     -- 初始化模型详细信息文本框
-    fn initModelInfoTextBox =
-    (
+    fn initModelInfoTextBox = (
         edtModelInfo.Multiline = true
         edtModelInfo.ReadOnly = true
         edtModelInfo.TextAlign = edtModelInfo.TextAlign.Left
