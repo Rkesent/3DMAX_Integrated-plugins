@@ -5,6 +5,26 @@
 -- 更新按钮如果不能更新脚本可在上面网址更新脚本。
 
 -- 基础函数定义
+-- 确保formatNumberWithLeadingZeros是全局函数
+global formatNumberWithLeadingZeros
+fn formatNumberWithLeadingZeros num width = (
+    try (
+        -- 确保输入值有效
+        if num == undefined do num = 1
+        if width == undefined do width = 3
+        
+        -- 转换为字符串并填充
+        local numStr = num as string
+        while numStr.count < width do (
+            numStr = "0" + numStr
+        )
+        return numStr
+    ) catch (
+        -- 发生错误时返回默认值
+        return "001"
+    )
+)
+
 fn isPowerOfTwo n = (
     try (
         if n == undefined or n <= 0 then return false
@@ -152,6 +172,7 @@ fn generateSequenceNumber num width = (
 )
 
 -- 新增：对象重命名函数
+global renameObject
 fn renameObject obj newName = (
     try (
         if obj != undefined and isValidNode obj then (
@@ -172,6 +193,7 @@ fn renameObject obj newName = (
 )
 
 -- 新增：批量重命名函数
+global renameModels
 fn renameModels baseCode cityName projName abbrName startNum fillCount objsToProcess = (
     local errorLog = stringStream ""
     local processedCount = 0
@@ -256,10 +278,7 @@ fn renameModels baseCode cityName projName abbrName startNum fillCount objsToPro
                     local oldName = obj.name
                     
                     -- 尝试重命名
-                    obj.name = newName
-                    
-                    -- 验证重命名是否成功
-                    if obj.name == newName then (
+                    if (renameObject obj newName) then (
                         processedCount += 1
                         currentNum += 1
                     ) else (
@@ -299,26 +318,6 @@ fn renameModels baseCode cityName projName abbrName startNum fillCount objsToPro
         gc light:true
         
         return #(0, 1, "重命名过程发生严重错误")
-    )
-)
-
--- 添加格式化数字的辅助函数，确保该函数是全局函数
-global formatNumberWithLeadingZeros
-fn formatNumberWithLeadingZeros num width = (
-    try (
-        -- 确保输入值有效
-        if num == undefined do num = 1
-        if width == undefined do width = 3
-        
-        -- 转换为字符串并填充
-        local numStr = num as string
-        while numStr.count < width do (
-            numStr = "0" + numStr
-        )
-        return numStr
-    ) catch (
-        -- 发生错误时返回默认值
-        return "001"
     )
 )
 
@@ -764,7 +763,7 @@ fn registerTextureRename oldPath newPath = (
 -- ... existing code ...
 
 -- 创建UI
-rollout replaceMissingMapsRollout "后处理工具集合-v1.3.3" width:640 height:420
+rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 height:420
 (
     -- 主列表视图
     dotNetControl lvModels "System.Windows.Forms.ListView" pos:[10,10] width:400 height:300
@@ -3294,7 +3293,7 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.3" width:640 heigh
             insertLog "正在检查更新..." clearPrevious:true
             
             -- 当前版本号
-            local currentVersion = "1.3.3"
+            local currentVersion = "1.3.4"
             
             local apiUrl = "https://api.github.com/repos/Rkesent/3DMAX_Integrated-plugins/releases/latest"
             
