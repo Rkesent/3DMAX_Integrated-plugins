@@ -190,65 +190,71 @@ struct SafeBitmapOperator (
 -- 内存监控工具
 struct MemoryMonitor (
     _lastMemoryUsage = 0,
-    _checkInterval = 5000, -- 5秒检查一次
-    _timer = undefined,
     
     fn startMonitoring = (
         try (
-            _timer = dotNetObject "System.Windows.Forms.Timer"
-            _timer.Interval = _checkInterval
-            
-            -- 注册到资源管理器
-            g_resourceManager.registerDotNetObject _timer
-            
-            dotNet.addEventHandler _timer "Tick" checkMemoryUsage
-            _timer.Start()
-            
+            -- 记录当前内存使用情况
+            _lastMemoryUsage = heapSize
             format "内存监控已启动\n"
+            return true
         ) catch (
             format "启动内存监控失败: %\n" (getCurrentException())
+            return false
         )
     ),
     
     fn stopMonitoring = (
         try (
-            if _timer != undefined do (
-                _timer.Stop()
-                g_resourceManager.unregisterDotNetObject _timer
-                _timer.Dispose()
-                _timer = undefined
-            )
+            -- 重置内存使用记录
+            _lastMemoryUsage = 0
             format "内存监控已停止\n"
+            return true
         ) catch (
             format "停止内存监控失败: %\n" (getCurrentException())
+            return false
         )
     ),
     
-    fn checkMemoryUsage sender args = (
+    fn checkMemoryUsage = (
         try (
             -- 获取当前内存使用情况
             local currentMemory = heapSize
             local memoryDiff = currentMemory - _lastMemoryUsage
             
-            -- 如果内存增长超过阈值，触发清理
-            if memoryDiff > 50000000 do ( -- 50MB阈值
-                format "检测到内存增长: %MB，触发清理\n" (memoryDiff / 1048576.0)
-                enhancedCleanupResources()
-            )
+            -- 获取当前场景文件大小
+            local sceneFilePath = maxFilePath + maxFileName
+            local sceneFileSize = 0
             
-            _lastMemoryUsage = currentMemory
-            
-            -- 输出资源统计
-            if g_resourceManager != undefined do (
-                local stats = g_resourceManager.getMemoryStats()
-                format "资源统计: "
-                for stat in stats do (
-                    format "%: % " stat[1] stat[2]
+            if sceneFilePath != "" and doesFileExist sceneFilePath then (
+                try (
+                    local fileInfo = dotNetObject "System.IO.FileInfo" sceneFilePath
+                    sceneFileSize = fileInfo.Length
+                    -- 转换为MB
+                    sceneFileSize = sceneFileSize / 1048576.0
+                ) catch (
+                    format "获取场景文件大小失败: %\n" (getCurrentException())
                 )
-                format "\n"
             )
+            
+            -- 设置内存阈值为场景文件大小 + 300MB (以字节为单位)
+            local thresholdMB = sceneFileSize + 300.0
+            local threshold = thresholdMB * 1048576.0
+            
+            -- 如果内存增长超过阈值，触发清理
+            if memoryDiff > threshold then (
+                format "检测到内存增长: %MB，超过场景大小(%MB)+300MB的阈值，触发清理\n" (memoryDiff / 1048576.0) sceneFileSize
+                enhancedCleanupResources()
+                -- 更新内存使用记录
+                _lastMemoryUsage = heapSize
+                return true
+            )
+            
+            -- 没有触发清理，也更新内存使用记录
+            _lastMemoryUsage = currentMemory
+            return false
         ) catch (
             format "内存检查出错: %\n" (getCurrentException())
+            return false
         )
     )
 )
@@ -262,10 +268,51 @@ fn enhancedCleanupResources = (
         )
         
         -- 清理材质库
-        purgeUnusedMtlLib()
+        try (
+            -- 使用execute安全地检查和调用函数
+            if (execute "purgeUnusedMtlLib") != undefined then (
+                execute "purgeUnusedMtlLib()"
+                format "已清理未使用的材质库\n"
+            )
+            -- 尝试其他方法清理材质
+            else (
+                -- 尝试使用MatEditor
+                if (execute "MatEditor") != undefined and (execute "MatEditor.Close") != undefined then (
+                    execute "MatEditor.Close()"
+                    format "已关闭材质编辑器\n"
+                )
+                
+                -- 尝试使用垃圾回收来清理材质
+                gc()
+                format "使用垃圾回收清理材质\n"
+            )
+        ) catch (
+            format "清理未使用材质库失败: %\n" (getCurrentException())
+        )
         
         -- 清理位图代理
-        bitmapproxy.freeallbitmaps()
+        try (
+            -- 尝试使用bitmapproxy.freeallbitmaps()
+            if (execute "bitmapproxy") != undefined and (execute "bitmapproxy.freeallbitmaps") != undefined then (
+                execute "bitmapproxy.freeallbitmaps()"
+                format "已释放位图代理\n"
+            )
+            -- 如果上面的方法不可用，尝试其他方式清理位图
+            else (
+                -- 尝试使用BitmapManager
+                if (execute "BitmapManager") != undefined and (execute "BitmapManager.FreeSceneBitmaps") != undefined then (
+                    execute "BitmapManager.FreeSceneBitmaps()"
+                    format "已使用BitmapManager释放场景位图\n"
+                )
+                else (
+                    -- 最后的备选方案：使用垃圾回收
+                    gc()
+                    format "使用垃圾回收清理位图\n"
+                )
+            )
+        ) catch (
+            format "清理位图代理失败: %\n" (getCurrentException())
+        )
         
         -- 多次垃圾回收确保彻底清理
         for i = 1 to 3 do (
@@ -287,129 +334,223 @@ fn getDetailedMemoryStats = (
         format "开始收集内存使用统计数据...\n"
         
         -- 获取3ds Max堆内存信息
-        local totalHeap = heapSize()
-        local freeHeap = heapFree()
-        local usedHeap = totalHeap - freeHeap
-        
-        -- 转换为MB并格式化
-        local totalHeapMB = (totalHeap / 1048576.0) as string + " MB"
-        local freeHeapMB = (freeHeap / 1048576.0) as string + " MB"
-        local usedHeapMB = (usedHeap / 1048576.0) as string + " MB"
-        local usagePercent = (100 * (usedHeap as float / totalHeap as float)) as string + "%"
-        
-        -- 获取系统内存信息(如果支持)
-        local systemTotalMem = "未知"
-        local systemFreeMem = "未知"
-        local systemUsedMem = "未知"
-        local systemUsagePercent = "未知"
-        
         try (
-            -- 尝试获取Windows内存信息
-            local sysMemory = sysInfo.getSystemMemoryInfo()
-            if sysMemory != undefined then (
-                -- 物理内存信息(MB)
-                systemTotalMem = (sysMemory.physicalMemoryTotal / 1048576.0) as string + " MB"
-                systemFreeMem = (sysMemory.physicalMemoryAvailable / 1048576.0) as string + " MB"
-                local sysUsed = sysMemory.physicalMemoryTotal - sysMemory.physicalMemoryAvailable
-                systemUsedMem = (sysUsed / 1048576.0) as string + " MB"
-                systemUsagePercent = (100 * (sysUsed as float / sysMemory.physicalMemoryTotal as float)) as string + "%"
-            )
+            local totalHeap = heapSize
+            local freeHeap = heapFree
+            local usedHeap = totalHeap - freeHeap
+            
+            -- 转换为MB并格式化
+            local totalHeapMB = (totalHeap / 1048576.0) as string + " MB"
+            local freeHeapMB = (freeHeap / 1048576.0) as string + " MB"
+            local usedHeapMB = (usedHeap / 1048576.0) as string + " MB"
+            local usagePercent = (100 * (usedHeap as float / totalHeap as float)) as string + "%"
+            
+            -- 添加到统计数据
+            append stats #("3ds Max内存总量", totalHeapMB)
+            append stats #("3ds Max已用内存", usedHeapMB)
+            append stats #("3ds Max可用内存", freeHeapMB)
+            append stats #("3ds Max内存使用率", usagePercent)
         ) catch (
-            format "获取系统内存信息失败: %\n" (getCurrentException())
+            format "获取3ds Max内存信息失败: %\n" (getCurrentException())
+            -- 添加默认信息
+            append stats #("3ds Max内存信息", "获取失败")
         )
         
-        -- 获取场景统计信息
-        local objectsCount = "未知"
-        local materialsCount = "未知"
-        local texturesCount = "未知"
-        
+        -- 获取当前场景文件大小
         try (
-            objectsCount = objects.count as string + " 个"
-            materialsCount = sceneMaterials.count as string + " 个"
+            local sceneFilePath = maxFilePath + maxFileName
+            local sceneFileSize = 0
+            local sceneFileSizeMB = "未保存"
             
-            -- 统计唯一的贴图文件数量
-            local uniqueTexturePaths = #()
-            for mat in sceneMaterials do (
-                if classof mat == MultiMaterial then (
-                    for i = 1 to mat.numsubs do (
-                        local subMat = mat[i]
-                        if subMat != undefined then (
-                            local diffuseMap = case classof subMat of (
-                                StandardMaterial: subMat.diffuseMap
-                                VRayMtl: subMat.texmap_diffuse
-                                PhysicalMaterial: subMat.base_color_map
-                                default: undefined
-                            )
+            if sceneFilePath != "" and doesFileExist sceneFilePath then (
+                try (
+                    local fileInfo = dotNetObject "System.IO.FileInfo" sceneFilePath
+                    sceneFileSize = fileInfo.Length
+                    -- 转换为MB
+                    sceneFileSizeMB = (sceneFileSize / 1048576.0) as string + " MB"
+                ) catch (
+                    format "获取场景文件大小失败: %\n" (getCurrentException())
+                )
+            )
+            
+            -- 计算基于场景大小的内存阈值
+            local thresholdMB = "未知"
+            if sceneFileSize > 0 then (
+                local sceneSizeMB = sceneFileSize / 1048576.0
+                thresholdMB = ((sceneSizeMB + 300.0) as string) + " MB"
+            )
+            
+            -- 添加场景文件信息
+            append stats #("当前场景文件大小", sceneFileSizeMB)
+            append stats #("内存清理阈值(场景+300MB)", thresholdMB)
+        ) catch (
+            format "获取场景文件信息失败: %\n" (getCurrentException())
+            append stats #("场景文件信息", "获取失败")
+        )
+        
+        -- 获取系统内存信息(如果支持)
+        try (
+            local systemTotalMem = "未知"
+            local systemFreeMem = "未知"
+            local systemUsedMem = "未知"
+            local systemUsagePercent = "未知"
+            
+            try (
+                -- 尝试获取Windows内存信息
+                local sysMemory = sysInfo.getSystemMemoryInfo()
+                if sysMemory != undefined then (
+                    -- 检查返回的是否为数组
+                    if classof sysMemory == Array then (
+                        -- 根据数组索引获取信息
+                        -- 通常数组的第2个元素是总物理内存，第3个元素是可用物理内存
+                        -- 索引可能因3ds Max版本而异
+                        if sysMemory.count >= 3 then (
+                            local totalPhysicalMemory = sysMemory[2]
+                            local availablePhysicalMemory = sysMemory[3]
                             
-                            if diffuseMap != undefined and diffuseMap.filename != undefined then (
-                                if findItem uniqueTexturePaths diffuseMap.filename == 0 then (
-                                    append uniqueTexturePaths diffuseMap.filename
-                                )
-                            )
-                        )
-                    )
-                ) else (
-                    local diffuseMap = case classof mat of (
-                        StandardMaterial: mat.diffuseMap
-                        VRayMtl: mat.texmap_diffuse
-                        PhysicalMaterial: mat.base_color_map
-                        default: undefined
-                    )
-                    
-                    if diffuseMap != undefined and diffuseMap.filename != undefined then (
-                        if findItem uniqueTexturePaths diffuseMap.filename == 0 then (
-                            append uniqueTexturePaths diffuseMap.filename
+                            -- 转换为MB
+                            systemTotalMem = (totalPhysicalMemory / 1048576.0) as string + " MB"
+                            systemFreeMem = (availablePhysicalMemory / 1048576.0) as string + " MB"
+                            
+                            -- 计算已用内存和使用率
+                            local usedPhysicalMemory = totalPhysicalMemory - availablePhysicalMemory
+                            systemUsedMem = (usedPhysicalMemory / 1048576.0) as string + " MB"
+                            systemUsagePercent = (100 * (usedPhysicalMemory as float / totalPhysicalMemory as float)) as string + "%"
                         )
                     )
                 )
+            ) catch (
+                format "获取系统内存信息失败: %\n" (getCurrentException())
             )
-            texturesCount = uniqueTexturePaths.count as string + " 个"
-            uniqueTexturePaths = undefined -- 释放内存
+            
+            -- 添加系统内存信息
+            append stats #("系统内存总量", systemTotalMem)
+            append stats #("系统已用内存", systemUsedMem)
+            append stats #("系统可用内存", systemFreeMem)
+            append stats #("系统内存使用率", systemUsagePercent)
         ) catch (
-            format "获取场景统计信息失败: %\n" (getCurrentException())
+            format "添加系统内存信息失败: %\n" (getCurrentException())
+            append stats #("系统内存信息", "获取失败")
         )
         
-        -- 获取资源管理器统计(如果有)
-        local resourceStats = #()
+        -- 添加GC信息
         try (
-            if g_resourceManager != undefined then (
-                resourceStats = g_resourceManager.getMemoryStats()
+            local gcInfo = #()
+            try (
+                -- 执行轻量级GC并获取释放的内存量
+                local beforeGC = heapSize
+                gc light:true
+                local afterGC = heapSize
+                local freedMemory = beforeGC - afterGC
+                
+                append gcInfo #("最近GC释放内存", (freedMemory / 1048576.0) as string + " MB")
+            ) catch (
+                append gcInfo #("GC信息", "获取失败")
             )
+            
+            -- 合并GC信息
+            join stats gcInfo
         ) catch (
-            format "获取资源管理器统计失败: %\n" (getCurrentException())
+            format "添加GC信息失败: %\n" (getCurrentException())
         )
         
-        -- 合并所有统计
-        append stats #("3ds Max内存总量", totalHeapMB)
-        append stats #("3ds Max已用内存", usedHeapMB)
-        append stats #("3ds Max可用内存", freeHeapMB)
-        append stats #("3ds Max内存使用率", usagePercent)
-        append stats #("系统内存总量", systemTotalMem)
-        append stats #("系统已用内存", systemUsedMem)
-        append stats #("系统可用内存", systemFreeMem)
-        append stats #("系统内存使用率", systemUsagePercent)
-        append stats #("场景物体数量", objectsCount)
-        append stats #("材质总数", materialsCount)
-        append stats #("贴图总数", texturesCount)
-        
-        -- 添加资源管理器统计
-        for stat in resourceStats do (
-            append stats stat
+        -- 添加其他系统信息
+        try (
+            -- 添加3ds Max版本
+            try (
+                append stats #("3ds Max版本", maxVersion())
+            ) catch (
+                append stats #("3ds Max版本", "未知")
+            )
+            
+            -- 获取操作系统信息
+            try (
+                local osInfo = "未知"
+                try (
+                    -- 尝试使用简单方法获取Windows版本
+                    local osVersion = (dotNetClass "System.Environment").OSVersion
+                    if osVersion != undefined then (
+                        local versionString = osVersion.Version.ToString()
+                        local platform = osVersion.Platform.ToString()
+                        osInfo = platform + " " + versionString
+                        
+                        -- 尝试获取更友好的名称
+                        try (
+                            local computerName = if sysInfo.computername != undefined then sysInfo.computername else "未知"
+                            osInfo = osInfo + " (计算机名: " + computerName + ")"
+                        ) catch ()
+                    )
+                ) catch (
+                    -- 如果失败，使用简单的Windows标识
+                    osInfo = "Windows"
+                )
+                append stats #("操作系统", osInfo)
+            ) catch (
+                append stats #("操作系统", "未知")
+            )
+            
+            -- 获取CPU信息
+            try (
+                local cpuInfo = "未知"
+                try (
+                    -- 尝试使用简单的方法获取CPU信息
+                    if sysInfo.cpucount != undefined then (
+                        cpuInfo = sysInfo.cpucount as string + " 核处理器"
+                        
+                        -- 尝试使用WMI获取更详细的CPU信息
+                        try (
+                            -- 创建WMI查询
+                            local wmiNameSpace = "root\\CIMV2"
+                            local wmiQuery = "SELECT * FROM Win32_Processor"
+                            
+                            -- 创建WMI对象
+                            local wmiLocator = dotNetObject "System.Management.ManagementClass" wmiNameSpace
+                            local wmiProcessor = wmiLocator.GetInstances()
+                            
+                            -- 获取第一个处理器信息
+                            local enum = wmiProcessor.GetEnumerator()
+                            if enum.MoveNext() then (
+                                local processor = enum.Current
+                                local processorName = processor.Properties.Item["Name"].Value as string
+                                if processorName != undefined and processorName != "" then (
+                                    cpuInfo = processorName
+                                )
+                            )
+                        ) catch ()
+                    )
+                ) catch (
+                    cpuInfo = "未知处理器"
+                )
+                append stats #("CPU信息", cpuInfo)
+                
+                -- 处理器数量
+                try (
+                    if sysInfo.cpucount != undefined then (
+                        append stats #("处理器数量", sysInfo.cpucount as string)
+                    )
+                ) catch ()
+            ) catch (
+                append stats #("CPU信息", "未知")
+            )
+        ) catch (
+            format "添加系统信息失败: %\n" (getCurrentException())
         )
         
         format "内存统计数据收集完成，共%项\n" stats.count
+        return stats
     ) catch (
         format "获取内存统计时出错: %\n" (getCurrentException())
-        -- 确保至少返回一些基本数据
-        try (
-            append stats #("3ds Max内存总量", (heapSize() / 1048576.0) as string + " MB")
-            append stats #("3ds Max可用内存", (heapFree() / 1048576.0) as string + " MB") 
-        ) catch (
-            append stats #("状态", "内存统计获取失败")
+        -- 确保返回至少一些基本信息
+        if stats.count == 0 then (
+            try (
+                append stats #("3ds Max内存总量", (heapSize / 1048576.0) as string + " MB")
+                append stats #("3ds Max可用内存", (heapFree / 1048576.0) as string + " MB")
+            ) catch (
+                append stats #("状态", "内存统计获取失败")
+            )
         )
+        return stats
     )
-    
-    return stats
 )
 
 -- 优化的位图尺寸检查函数
@@ -528,99 +669,99 @@ fn checkTextureSize bmap = (
 -- global isProcessing = false
 
 -- 内存统计更新计时器
-global updateMemoryStatsTimer = undefined
+-- global updateMemoryStatsTimer = undefined
 
 -- 启动内存统计更新计时器
-fn startMemoryStatsTimer interval:5000 = (
-    try (
-        format "开始启动内存统计更新计时器...\n"
-        
-        -- 如果已经有计时器在运行，先停止
-        if updateMemoryStatsTimer != undefined do (
-            try (
-                updateMemoryStatsTimer.Stop()
-                g_resourceManager.unregisterDotNetObject updateMemoryStatsTimer
-                updateMemoryStatsTimer.Dispose()
-            ) catch (
-                format "停止旧计时器出错: %\n" (getCurrentException())
-            )
-            updateMemoryStatsTimer = undefined
-        )
-        
-        -- 创建新的计时器
-        updateMemoryStatsTimer = dotNetObject "System.Windows.Forms.Timer"
-        updateMemoryStatsTimer.Interval = interval
-        
-        -- 注册到资源管理器
-        g_resourceManager.registerDotNetObject updateMemoryStatsTimer
-        
-        -- 定义更新函数
-        fn memoryStatsTimerTick sender args = (
-            try (
-                -- 直接在计时器中添加数据，避免依赖其他函数
-                if lvMemoryStats != undefined and lvMemoryStats.visible then (
-                    try (
-                        -- 更新基本内存数据
-                        local totalHeap = heapSize()
-                        local freeHeap = heapFree()
-                        local usedHeap = totalHeap - freeHeap
-                        local totalHeapMB = (totalHeap / 1048576.0) as string + " MB"
-                        local freeHeapMB = (freeHeap / 1048576.0) as string + " MB"
-                        
-                        -- 检查是否已有这些项
-                        local foundItems = #()
-                        for i = 0 to lvMemoryStats.Items.Count - 1 do (
-                            local itemName = lvMemoryStats.Items.Item[i].Text
-                            append foundItems itemName
-                            
-                            -- 更新现有数据
-                            if itemName == "3ds Max内存总量" then 
-                                lvMemoryStats.Items.Item[i].SubItems.Item[1].Text = totalHeapMB
-                            else if itemName == "3ds Max可用内存" then
-                                lvMemoryStats.Items.Item[i].SubItems.Item[1].Text = freeHeapMB
-                        )
-                        
-                        -- 如果没有找到这些项，尝试调用完整更新
-                        if foundItems.count == 0 then (
-                            updateMemoryStats()
-                        )
-                    ) catch (
-                        format "计时器中更新内存数据失败: %\n" (getCurrentException())
-                    )
-                )
-            ) catch (
-                format "内存统计更新时出错: %\n" (getCurrentException())
-            )
-        )
-        
-        -- 添加事件处理
-        dotNet.addEventHandler updateMemoryStatsTimer "Tick" memoryStatsTimerTick
-        updateMemoryStatsTimer.Start()
-        
-        format "内存统计更新计时器已启动，间隔: %毫秒\n" interval
-        return true
-    ) catch (
-        format "启动内存统计更新计时器失败: %\n" (getCurrentException())
-        return false
-    )
-)
+-- fn startMemoryStatsTimer interval:5000 = (
+--     try (
+--         format "开始启动内存统计更新计时器...\n"
+--         
+--         -- 如果已经有计时器在运行，先停止
+--         if updateMemoryStatsTimer != undefined do (
+--             try (
+--                 updateMemoryStatsTimer.Stop()
+--                 g_resourceManager.unregisterDotNetObject updateMemoryStatsTimer
+--                 updateMemoryStatsTimer.Dispose()
+--             ) catch (
+--                 format "停止旧计时器出错: %\n" (getCurrentException())
+--             )
+--             updateMemoryStatsTimer = undefined
+--         )
+--         
+--         -- 创建新的计时器
+--         updateMemoryStatsTimer = dotNetObject "System.Windows.Forms.Timer"
+--         updateMemoryStatsTimer.Interval = interval
+--         
+--         -- 注册到资源管理器
+--         g_resourceManager.registerDotNetObject updateMemoryStatsTimer
+--         
+--         -- 定义更新函数
+--         fn memoryStatsTimerTick sender args = (
+--             try (
+--                 -- 直接在计时器中添加数据，避免依赖其他函数
+--                 if lvMemoryStats != undefined and lvMemoryStats.visible then (
+--                     try (
+--                         -- 更新基本内存数据
+--                         local totalHeap = heapSize
+--                         local freeHeap = heapFree
+--                         local usedHeap = totalHeap - freeHeap
+--                         local totalHeapMB = (totalHeap / 1048576.0) as string + " MB"
+--                         local freeHeapMB = (freeHeap / 1048576.0) as string + " MB"
+--                         
+--                         -- 检查是否已有这些项
+--                         local foundItems = #()
+--                         for i = 0 to lvMemoryStats.Items.Count - 1 do (
+--                             local itemName = lvMemoryStats.Items.Item[i].Text
+--                             append foundItems itemName
+--                             
+--                             -- 更新现有数据
+--                             if itemName == "3ds Max内存总量" then 
+--                                 lvMemoryStats.Items.Item[i].SubItems.Item[1].Text = totalHeapMB
+--                             else if itemName == "3ds Max可用内存" then
+--                                 lvMemoryStats.Items.Item[i].SubItems.Item[1].Text = freeHeapMB
+--                         )
+--                         
+--                         -- 如果没有找到这些项，尝试调用完整更新
+--                         if foundItems.count == 0 then (
+--                             updateMemoryStats()
+--                         )
+--                     ) catch (
+--                         format "计时器中更新内存数据失败: %\n" (getCurrentException())
+--                     )
+--                 )
+--             ) catch (
+--                 format "内存统计更新时出错: %\n" (getCurrentException())
+--             )
+--         )
+--         
+--         -- 添加事件处理
+--         dotNet.addEventHandler updateMemoryStatsTimer "Tick" memoryStatsTimerTick
+--         updateMemoryStatsTimer.Start()
+--         
+--         format "内存统计更新计时器已启动，间隔: %毫秒\n" interval
+--         return true
+--     ) catch (
+--         format "启动内存统计更新计时器失败: %\n" (getCurrentException())
+--         return false
+--     )
+-- )
 
 -- 停止内存统计更新计时器
-fn stopMemoryStatsTimer = (
-    try (
-        if updateMemoryStatsTimer != undefined do (
-            updateMemoryStatsTimer.Stop()
-            g_resourceManager.unregisterDotNetObject updateMemoryStatsTimer
-            updateMemoryStatsTimer.Dispose()
-            updateMemoryStatsTimer = undefined
-            format "内存统计更新计时器已停止\n"
-        )
-        return true
-    ) catch (
-        format "停止内存统计更新计时器失败: %\n" (getCurrentException())
-        return false
-    )
-)
+-- fn stopMemoryStatsTimer = (
+--     try (
+--         if updateMemoryStatsTimer != undefined do (
+--             updateMemoryStatsTimer.Stop()
+--             g_resourceManager.unregisterDotNetObject updateMemoryStatsTimer
+--             updateMemoryStatsTimer.Dispose()
+--             updateMemoryStatsTimer = undefined
+--             format "内存统计更新计时器已停止\n"
+--         )
+--         return true
+--     ) catch (
+--         format "停止内存统计更新计时器失败: %\n" (getCurrentException())
+--         return false
+--     )
+-- )
 
 -- 资源管理相关函数
 fn cleanupDotNetObject obj = (
@@ -1299,6 +1440,237 @@ fn registerTextureRename oldPath newPath = (
 -- 这里是文件的其他内容
 -- ... existing code ...
 
+-- 添加内存统计独立rollout
+rollout memoryStatsRollout "内存统计" width:280 height:400
+(
+    dotNetControl lvMemoryStats "System.Windows.Forms.ListView" pos:[10,10] width:260 height:350
+    button btnRefresh "刷新统计" pos:[10,365] width:80 height:25
+    button btnCheckMemory "检查内存" pos:[100,365] width:80 height:25
+    button btnClose "关闭" pos:[190,365] width:80 height:25
+    
+    -- 初始化内存统计表格
+    fn initMemoryStatsListView = (
+        try (
+            format "开始初始化内存统计表格...\n"
+            
+            if lvMemoryStats != undefined then (
+                -- 基本设置
+                lvMemoryStats.View = lvMemoryStats.View.Details
+                lvMemoryStats.GridLines = true
+                lvMemoryStats.FullRowSelect = true
+                lvMemoryStats.MultiSelect = false
+                lvMemoryStats.HeaderStyle = (dotNetClass "System.Windows.Forms.ColumnHeaderStyle").Nonclickable
+                
+                -- 清除现有列并添加新列
+                lvMemoryStats.Columns.Clear()
+                local col1 = lvMemoryStats.Columns.Add "统计项目" 150
+                local col2 = lvMemoryStats.Columns.Add "数值" 120
+                
+                -- 设置样式
+                lvMemoryStats.BackColor = (dotNetClass "System.Drawing.Color").FromArgb 240 240 240
+                lvMemoryStats.ForeColor = (dotNetClass "System.Drawing.Color").Black
+                lvMemoryStats.BorderStyle = (dotNetClass "System.Windows.Forms.BorderStyle").Fixed3D
+                
+                -- 设置字体
+                try(
+                    local newFont = dotNetObject "System.Drawing.Font" "Arial" 9
+                    lvMemoryStats.Font = newFont
+                    g_resourceManager.registerDotNetObject newFont
+                )catch()
+                
+                -- 注册到资源管理器
+                g_resourceManager.registerDotNetObject lvMemoryStats
+                
+                format "内存统计表格初始化成功\n"
+                return true
+            ) else (
+                format "内存统计表格控件未找到\n"
+                return false
+            )
+        ) catch (
+            format "初始化内存统计表格时出错: %\n" (getCurrentException())
+            return false
+        )
+    )
+    
+    -- 更新内存统计数据
+    fn updateMemoryStats = (
+        try (
+            if lvMemoryStats != undefined and lvMemoryStats.IsDisposed != true then (
+                -- 清空表格
+                try(lvMemoryStats.Items.Clear())catch()
+                try(lvMemoryStats.BeginUpdate())catch()
+                
+                -- 获取统计数据
+                local stats = #()
+                try (
+                    stats = getDetailedMemoryStats()
+                ) catch (
+                    format "获取内存统计数据失败: %\n" (getCurrentException())
+                )
+                
+                -- 如果没有数据，添加一些默认项
+                if stats == undefined or stats.count == 0 do (
+                    stats = #()
+                    try (
+                        append stats #("3ds Max内存总量", (heapSize / 1048576.0) as string + " MB")
+                        append stats #("3ds Max可用内存", (heapFree / 1048576.0) as string + " MB")
+                    ) catch (
+                        append stats #("状态", "无法获取内存信息")
+                    )
+                    format "添加默认内存统计项\n"
+                )
+                
+                -- 添加到表格
+                for stat in stats do (
+                    try (
+                        -- 确保数据有效
+                        if stat != undefined and stat.count >= 2 then (
+                            local statName = if stat[1] != undefined then stat[1] as string else "未知项"
+                            local statValue = if stat[2] != undefined then stat[2] as string else "未知值"
+                            
+                            -- 创建列表项
+                            local item = undefined
+                            try (
+                                item = dotNetObject "System.Windows.Forms.ListViewItem" statName
+                            ) catch (
+                                format "创建ListViewItem失败: %\n" (getCurrentException())
+                                continue
+                            )
+                            
+                            -- 添加子项
+                            if item != undefined then (
+                                try (
+                                    item.SubItems.Add statValue
+                                    
+                                    -- 设置颜色样式(可选)
+                                    if matchPattern statName pattern:"*使用率*" then (
+                                        local usageValue = substituteString statValue "%" ""
+                                        try (
+                                            local usage = usageValue as float
+                                            if usage > 90.0 then
+                                                item.ForeColor = (dotNetClass "System.Drawing.Color").Red
+                                            else if usage > 70.0 then
+                                                item.ForeColor = (dotNetClass "System.Drawing.Color").Orange
+                                            else
+                                                item.ForeColor = (dotNetClass "System.Drawing.Color").Green
+                                        ) catch()
+                                    )
+                                    
+                                    -- 添加到列表
+                                    if lvMemoryStats != undefined and lvMemoryStats.IsDisposed != true then (
+                                        lvMemoryStats.Items.Add item
+                                    )
+                                ) catch (
+                                    format "设置ListViewItem属性失败: %\n" (getCurrentException())
+                                )
+                            )
+                        )
+                    ) catch (
+                        format "添加内存统计项时出错: %\n" (getCurrentException())
+                    )
+                )
+                
+                -- 结束更新
+                try(
+                    if lvMemoryStats != undefined and lvMemoryStats.IsDisposed != true then (
+                        lvMemoryStats.EndUpdate()
+                    )
+                )catch()
+                
+                format "内存统计表格更新完成\n"
+                return true
+            ) else (
+                format "内存统计表格控件未找到或已释放\n"
+            )
+            return false
+        ) catch (
+            format "更新内存统计表格时出错: %\n" (getCurrentException())
+            return false
+        )
+    )
+    
+    -- 执行内存检查
+    fn performMemoryCheck = (
+        if g_memoryMonitor != undefined then (
+            -- 获取当前场景文件大小
+            local sceneFilePath = maxFilePath + maxFileName
+            local sceneFileSize = 0
+            local sceneFileSizeMB = "未保存"
+            
+            if sceneFilePath != "" and doesFileExist sceneFilePath then (
+                try (
+                    local fileInfo = dotNetObject "System.IO.FileInfo" sceneFilePath
+                    sceneFileSize = fileInfo.Length
+                    -- 转换为MB
+                    sceneFileSizeMB = (sceneFileSize / 1048576.0)
+                ) catch (
+                    format "获取场景文件大小失败: %\n" (getCurrentException())
+                )
+            )
+            
+            -- 计算阈值
+            local thresholdMB = sceneFileSizeMB + 300.0
+            
+            local result = g_memoryMonitor.checkMemoryUsage()
+            if result then (
+                -- 如果执行了清理，刷新统计数据
+                updateMemoryStats()
+                messageBox ("检测到内存增长超过阈值，已执行清理操作。\n\n场景文件大小: " + sceneFileSizeMB as string + " MB\n清理阈值: " + thresholdMB as string + " MB") title:"内存检查"
+            ) else (
+                messageBox ("内存使用正常，无需清理。\n\n场景文件大小: " + sceneFileSizeMB as string + " MB\n清理阈值: " + thresholdMB as string + " MB") title:"内存检查"
+            )
+        )
+    )
+    
+    -- 刷新按钮点击事件
+    on btnRefresh pressed do (
+        updateMemoryStats()
+    )
+    
+    -- 检查内存按钮点击事件
+    on btnCheckMemory pressed do (
+        performMemoryCheck()
+    )
+    
+    -- 关闭按钮点击事件
+    on btnClose pressed do (
+        try (
+            -- 清理资源
+            if lvMemoryStats != undefined do (
+                lvMemoryStats.Items.Clear()
+                g_resourceManager.unregisterDotNetObject lvMemoryStats
+                cleanupDotNetObject lvMemoryStats
+            )
+            
+            -- 关闭对话框
+            destroyDialog memoryStatsRollout
+        ) catch (
+            format "关闭内存统计窗口时出错: %\n" (getCurrentException())
+        )
+    )
+    
+    -- 窗口初始化
+    on memoryStatsRollout open do (
+        initMemoryStatsListView()
+        updateMemoryStats()
+    )
+    
+    -- 窗口关闭
+    on memoryStatsRollout close do (
+        try (
+            -- 清理资源
+            if lvMemoryStats != undefined do (
+                lvMemoryStats.Items.Clear()
+                g_resourceManager.unregisterDotNetObject lvMemoryStats
+                cleanupDotNetObject lvMemoryStats
+            )
+        ) catch (
+            format "清理内存统计资源时出错: %\n" (getCurrentException())
+        )
+    )
+)
+
 -- 创建UI
 rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 height:420
 (
@@ -1313,9 +1685,9 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
     groupBox grpLog "操作日志" pos:[420,170] width:200 height:140
     dotNetControl edtLog "System.Windows.Forms.RichTextBox" pos:[430,190] width:180 height:110
 
-    -- 右侧内存监控伸缩面板
-    groupBox grpMemoryPanel "内存统计" pos:[640,10] width:250 height:380 visible:false
-    dotNetControl lvMemoryStats "System.Windows.Forms.ListView" pos:[650,30] width:230 height:350 visible:false
+    -- 移除右侧内存监控伸缩面板
+    -- groupBox grpMemoryPanel "内存统计" pos:[640,10] width:250 height:380 visible:false
+    -- dotNetControl lvMemoryStats "System.Windows.Forms.ListView" pos:[650,30] width:230 height:350 visible:false
 
     -- 新增折叠区域按钮
     button btnCollapsible "高级选项 ▼" pos:[400,380] width:100 height:30 tooltip:"点击展开或折叠高级选项区域（此功能暂未完善）"
@@ -1325,7 +1697,8 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
     -- 在可折叠区域中添加一些控件
     button btnAdvanced1 "贴图回退" pos:[20,450] width:100 height:30 visible:false tooltip:"查看贴图重命名历史记录，可以撤销重命名操作"
     button btnCheckUpdate "检查更新" pos:[20,490] width:100 height:30 visible:false tooltip:"检查插件的最新版本"
-    checkbox chkEnableMemoryMonitor "内存监控" pos:[140,450] width:90 height:30 checked:false visible:false tooltip:"勾选此项启用内存监控，自动释放未使用的资源"
+    button btnMemoryStats "内存统计" pos:[140,450] width:100 height:30 visible:false tooltip:"显示内存统计信息"
+    checkbox chkEnableMemoryMonitor "内存监控" pos:[140,490] width:90 height:30 checked:false visible:false tooltip:"勾选此项启用内存监控，自动释放未使用的资源"
     
     -- ID限制下拉框和标签
     label lblIDLimit "ID限制:" pos:[335,370] width:50 height:20 tooltip:"设置材质ID的最大数量限制"
@@ -1336,9 +1709,6 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
 
     -- 添加修复贴图尺寸按钮
     button btnFixTextures "修复贴图尺寸" pos:[335,340] width:100 height:20 tooltip:"尝试修复非2次幂尺寸的贴图"
-    
-    -- 添加内存监控按钮
-    -- 内存监控单选框已移至高级选项区域
     
     -- 按钮
     button btnCheck "检查" pos:[10,320] width:100 height:40 tooltip:"检查场景中丢失的贴图和非2次幂尺寸的贴图"
@@ -1390,24 +1760,11 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
             if btnCheckUpdate != undefined then
                 btnCheckUpdate.visible = isCollapsibleVisible
                 
+            if btnMemoryStats != undefined then
+                btnMemoryStats.visible = isCollapsibleVisible
+                
             if chkEnableMemoryMonitor != undefined then
                 chkEnableMemoryMonitor.visible = isCollapsibleVisible
-            
-            -- 如果展开了折叠区域，检查内存监控复选框状态
-            if isCollapsibleVisible and chkEnableMemoryMonitor != undefined and chkEnableMemoryMonitor.checked then (
-                -- 显示内存统计面板
-                if grpMemoryPanel != undefined then grpMemoryPanel.visible = true
-                if lvMemoryStats != undefined then (
-                    lvMemoryStats.visible = true
-                    -- 如果表格未初始化，则初始化
-                    if lvMemoryStats.Columns.Count == 0 then (
-                        initMemoryStatsListView()
-                        updateMemoryStats()
-                    )
-                )
-                -- 调整窗口宽度以适应内存统计面板
-                try(replaceMissingMapsRollout.width = 900)catch()
-            )
             
             -- 调整对话框高度
             local newHeight = if isCollapsibleVisible then expandedHeight else dialogHeight
@@ -1424,6 +1781,33 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
         toggleCollapsibleArea()
     )
     
+    -- 内存统计按钮点击事件
+    on btnMemoryStats pressed do (
+        try (
+            -- 创建并显示内存统计对话框
+            createDialog memoryStatsRollout modal:false
+        ) catch (
+            messageBox ("显示内存统计窗口时发生错误：" + (getCurrentException())) title:"错误"
+        )
+    )
+
+    -- 内存监控复选框事件
+    on chkEnableMemoryMonitor changed state do (
+        try (
+            if state then (
+                -- 启动内存监控
+                g_memoryMonitor.startMonitoring()
+                insertLog "内存监控已启动，将自动管理资源。"
+            ) else (
+                -- 停止内存监控
+                g_memoryMonitor.stopMonitoring()
+                insertLog "内存监控已停止。"
+            )
+        ) catch (
+            messageBox ("切换内存监控时发生错误：" + (getCurrentException())) title:"错误"
+        )
+    )
+
     -- 贴图名称历史记录按钮事件
     on btnAdvanced1 pressed do (
         try (
@@ -1498,123 +1882,6 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
         lvModels.width = 400  -- 调整总宽度为所有列宽之和
     )
     
-    -- 初始化内存统计表格
-    fn initMemoryStatsListView = (
-        try (
-            format "开始初始化内存统计表格...\n"
-            
-            if lvMemoryStats != undefined then (
-                -- 基本设置
-                lvMemoryStats.View = lvMemoryStats.View.Details
-                lvMemoryStats.GridLines = true
-                lvMemoryStats.FullRowSelect = true
-                lvMemoryStats.MultiSelect = false
-                lvMemoryStats.HeaderStyle = (dotNetClass "System.Windows.Forms.ColumnHeaderStyle").Nonclickable
-                
-                -- 清除现有列并添加新列
-                lvMemoryStats.Columns.Clear()
-                local col1 = lvMemoryStats.Columns.Add "统计项目" 130
-                local col2 = lvMemoryStats.Columns.Add "数值" 90
-                
-                -- 设置样式
-                lvMemoryStats.BackColor = (dotNetClass "System.Drawing.Color").FromArgb 240 240 240
-                lvMemoryStats.ForeColor = (dotNetClass "System.Drawing.Color").Black
-                lvMemoryStats.BorderStyle = (dotNetClass "System.Windows.Forms.BorderStyle").Fixed3D
-                
-                -- 设置字体
-                try(
-                    local newFont = dotNetObject "System.Drawing.Font" "Arial" 9
-                    lvMemoryStats.Font = newFont
-                    g_resourceManager.registerDotNetObject newFont
-                )catch()
-                
-                -- 添加初始测试项
-                try(
-                    local item = dotNetObject "System.Windows.Forms.ListViewItem" "初始化测试"
-                    item.SubItems.Add "成功"
-                    item.ForeColor = (dotNetClass "System.Drawing.Color").Green
-                    lvMemoryStats.Items.Add item
-                )catch()
-                
-                -- 注册到资源管理器
-                g_resourceManager.registerDotNetObject lvMemoryStats
-                
-                format "内存统计表格初始化成功\n"
-                return true
-            ) else (
-                format "内存统计表格控件未找到\n"
-                return false
-            )
-        ) catch (
-            format "初始化内存统计表格时出错: %\n" (getCurrentException())
-            return false
-        )
-    )
-    
-    -- 更新内存统计数据
-    fn updateMemoryStats = (
-        try (
-            if lvMemoryStats != undefined then (
-                -- 清空表格
-                lvMemoryStats.Items.Clear()
-                lvMemoryStats.BeginUpdate()
-                
-                -- 获取统计数据
-                local stats = getDetailedMemoryStats()
-                
-                -- 记录到日志以便调试
-                format "内存统计数据更新，共%项\n" stats.count
-                
-                -- 如果没有数据，添加一些默认项
-                if stats.count == 0 do (
-                    append stats #("3ds Max内存总量", (heapSize() / 1048576.0) as string + " MB")
-                    append stats #("3ds Max可用内存", (heapFree() / 1048576.0) as string + " MB")
-                    format "添加默认内存统计项\n"
-                )
-                
-                -- 添加到表格
-                for stat in stats do (
-                    try (
-                        -- 确保数据有效
-                        local statName = if stat[1] != undefined then stat[1] as string else "未知项"
-                        local statValue = if stat[2] != undefined then stat[2] as string else "未知值"
-                        
-                        local item = dotNetObject "System.Windows.Forms.ListViewItem" statName
-                        item.SubItems.Add statValue
-                        
-                        -- 设置颜色样式(可选)
-                        if matchPattern statName pattern:"*使用率*" then (
-                            local usageValue = substituteString statValue "%" ""
-                            try (
-                                local usage = usageValue as float
-                                if usage > 90.0 then
-                                    item.ForeColor = (dotNetClass "System.Drawing.Color").Red
-                                else if usage > 70.0 then
-                                    item.ForeColor = (dotNetClass "System.Drawing.Color").Orange
-                                else
-                                    item.ForeColor = (dotNetClass "System.Drawing.Color").Green
-                            ) catch()
-                        )
-                        
-                        lvMemoryStats.Items.Add item
-                    ) catch (
-                        format "添加内存统计项时出错: %\n" (getCurrentException())
-                    )
-                )
-                
-                lvMemoryStats.EndUpdate()
-                format "内存统计表格更新完成\n"
-                return true
-            ) else (
-                format "内存统计表格控件未找到\n"
-            )
-            return false
-        ) catch (
-            format "更新内存统计表格时出错: %\n" (getCurrentException())
-            return false
-        )
-    )
-
     -- 检查缺少的文件
     fn checkMissingFiles = (
         local items = undefined
@@ -3618,10 +3885,10 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
             if grpCollapsible != undefined then grpCollapsible.visible = false
             if btnAdvanced1 != undefined then btnAdvanced1.visible = false
             if btnCheckUpdate != undefined then btnCheckUpdate.visible = false
+            if btnMemoryStats != undefined then btnMemoryStats.visible = false
             if chkEnableMemoryMonitor != undefined then chkEnableMemoryMonitor.visible = false
             
             -- 初始化内存统计面板为隐藏状态
-            if grpMemoryPanel != undefined then grpMemoryPanel.visible = false
             if lvMemoryStats != undefined then lvMemoryStats.visible = false
             
             -- 记录日志
@@ -3634,7 +3901,6 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
                     insertLog "内存监控已启动，将自动管理资源。"
                     
                     -- 显示右侧内存统计面板
-                    if grpMemoryPanel != undefined then grpMemoryPanel.visible = true
                     if lvMemoryStats != undefined then (
                         lvMemoryStats.visible = true
                         
@@ -3645,7 +3911,7 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
                         updateMemoryStats()
                         
                         -- 启动定时更新
-                        startMemoryStatsTimer()
+                        -- startMemoryStatsTimer()
                         
                         -- 输出调试日志
                         format "内存统计面板初始化完成\n"
@@ -3656,156 +3922,6 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
                 )
         ) catch (
             messageBox ("初始化界面时发生错误：" + (getCurrentException())) title:"错误"
-        )
-    )
-
-    -- 内存监控复选框事件
-    on chkEnableMemoryMonitor changed state do (
-        try (
-            if state then (
-                -- 启动内存监控
-                g_memoryMonitor.startMonitoring()
-                insertLog "内存监控已启动，将自动管理资源。"
-                
-                -- 显示右侧内存统计面板
-                if grpMemoryPanel != undefined then grpMemoryPanel.visible = true else format "统计面板未找到\n"
-                
-                -- 调整主窗口宽度以适应内存统计面板
-                try (replaceMissingMapsRollout.width = 900) catch (format "调整窗口宽度出错\n")
-                
-                -- 确保表格控件可用
-                if lvMemoryStats != undefined then (
-                    format "找到内存统计表格控件\n"
-                    lvMemoryStats.visible = true
-                    
-                    -- 初始化内存统计表格
-                    if not initMemoryStatsListView() then (
-                        format "表格初始化失败，尝试手动初始化\n"
-                        -- 手动设置基本属性
-                        try (
-                            lvMemoryStats.View = (dotNetClass "System.Windows.Forms.View").Details
-                            lvMemoryStats.GridLines = true
-                            lvMemoryStats.FullRowSelect = true
-                            
-                            -- 清除现有列并添加新列
-                            lvMemoryStats.Columns.Clear()
-                            lvMemoryStats.Columns.Add "统计项目" 130
-                            lvMemoryStats.Columns.Add "数值" 90
-                            
-                            -- 添加测试项
-                            local item = dotNetObject "System.Windows.Forms.ListViewItem" "手动初始化"
-                            item.SubItems.Add "成功"
-                            lvMemoryStats.Items.Add item
-                            
-                            g_resourceManager.registerDotNetObject lvMemoryStats
-                        ) catch (
-                            format "手动初始化表格失败: %\n" (getCurrentException())
-                        )
-                    )
-                    
-                    -- 立即更新一次统计
-                    if not updateMemoryStats() then (
-                        format "更新统计数据失败，尝试添加默认数据\n"
-                        try (
-                            -- 添加默认数据
-                            lvMemoryStats.Items.Clear()
-                            local item1 = dotNetObject "System.Windows.Forms.ListViewItem" "3ds Max内存使用"
-                            item1.SubItems.Add ((heapSize() / 1048576.0) as string + " MB")
-                            lvMemoryStats.Items.Add item1
-                            
-                            local item2 = dotNetObject "System.Windows.Forms.ListViewItem" "可用内存"
-                            item2.SubItems.Add ((heapFree() / 1048576.0) as string + " MB")
-                            lvMemoryStats.Items.Add item2
-                        ) catch (
-                            format "添加默认数据失败: %\n" (getCurrentException())
-                        )
-                    )
-                    
-                    -- 启动定时更新
-                    startMemoryStatsTimer interval:5000
-                    
-                ) else (
-                    format "内存统计表格控件未找到，尝试创建\n"
-                    try (
-                        -- 尝试重新创建ListView控件
-                        lvMemoryStats = dotNetObject "System.Windows.Forms.ListView"
-                        lvMemoryStats.Bounds = dotNetObject "System.Drawing.Rectangle" 650 30 230 350
-                        lvMemoryStats.View = (dotNetClass "System.Windows.Forms.View").Details
-                        lvMemoryStats.GridLines = true
-                        
-                        -- 添加列
-                        lvMemoryStats.Columns.Add "统计项目" 130
-                        lvMemoryStats.Columns.Add "数值" 90
-                        
-                        -- 添加一个测试项
-                        local item = dotNetObject "System.Windows.Forms.ListViewItem" "新建控件测试"
-                        item.SubItems.Add "成功"
-                        lvMemoryStats.Items.Add item
-                        
-                        -- 添加到窗体
-                        replaceMissingMapsRollout.Controls.Add lvMemoryStats
-                        lvMemoryStats.visible = true
-                        
-                        -- 注册到资源管理器
-                        g_resourceManager.registerDotNetObject lvMemoryStats
-                    ) catch (
-                        format "创建内存统计表格失败: %\n" (getCurrentException())
-                        insertLog "内存统计表格创建失败，但内存监控仍会正常工作。"
-                    )
-                )
-            ) else (
-                -- 停止内存监控
-                g_memoryMonitor.stopMonitoring()
-                insertLog "内存监控已停止。"
-                
-                -- 停止定时更新
-                stopMemoryStatsTimer()
-                
-                -- 隐藏右侧内存统计面板
-                if grpMemoryPanel != undefined then grpMemoryPanel.visible = false
-                if lvMemoryStats != undefined then lvMemoryStats.visible = false
-                
-                -- 恢复主窗口宽度
-                replaceMissingMapsRollout.width = 640
-            )
-        ) catch (
-            messageBox ("切换内存监控时发生错误：" + (getCurrentException())) title:"错误"
-        )
-    )
-
-    -- 添加窗口关闭事件处理
-    on replaceMissingMapsRollout close do (
-        try (
-            -- 停止内存监控
-            if g_memoryMonitor != undefined do (
-                g_memoryMonitor.stopMonitoring()
-            )
-            
-            -- 停止内存统计更新定时器
-            stopMemoryStatsTimer()
-            
-            -- 清理ListView
-            cleanupListView lvModels
-            
-            -- 清理内存统计表格
-            if lvMemoryStats != undefined do (
-                lvMemoryStats.Items.Clear()
-                g_resourceManager.unregisterDotNetObject lvMemoryStats
-                cleanupDotNetObject lvMemoryStats
-            )
-            
-            -- 清理文本框
-            cleanupDotNetObject edtLog
-            cleanupDotNetObject edtModelInfo
-            
-            -- 清理下拉框
-            cleanupDotNetObject cmbIDLimit
-            
-            -- 清理全局资源
-            enhancedCleanupResources()
-            
-        ) catch (
-            format "清理主窗资源时出错: %\n" (getCurrentException())
         )
     )
 
@@ -4021,6 +4137,35 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
             
         ) catch (
             messageBox ("修复贴图时发生错误：" + (getCurrentException())) title:"错误"
+        )
+    )
+
+    -- 添加窗口关闭事件处理
+    on replaceMissingMapsRollout close do (
+        try (
+            -- 停止内存监控
+            if g_memoryMonitor != undefined do (
+                g_memoryMonitor.stopMonitoring()
+            )
+            
+            -- 停止内存统计更新定时器
+            -- stopMemoryStatsTimer()
+            
+            -- 清理ListView
+            cleanupListView lvModels
+            
+            -- 清理文本框
+            cleanupDotNetObject edtLog
+            cleanupDotNetObject edtModelInfo
+            
+            -- 清理下拉框
+            cleanupDotNetObject cmbIDLimit
+            
+            -- 清理全局资源
+            enhancedCleanupResources()
+            
+        ) catch (
+            format "清理主窗资源时出错: %\n" (getCurrentException())
         )
     )
 )
