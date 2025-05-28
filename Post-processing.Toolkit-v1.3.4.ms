@@ -4,6 +4,447 @@
 -- 开源地址：https://github.com/Rkesent/3DMAX_Integrated-plugins
 -- 更新按钮如果不能更新脚本可在上面网址更新脚本。
 
+-- 内存管理优化组件
+-- 全局资源管理器
+struct GlobalResourceManager (
+    -- 私有成员
+    _missingMaps = #(),
+    _isProcessing = false,
+    _textureRenameHistory = #(),
+    _openBitmaps = #(),
+    _dotNetObjects = #(),
+    _stringStreams = #(),
+    
+    -- 获取器方法
+    fn getMissingMaps = _missingMaps,
+    fn getIsProcessing = _isProcessing,
+    fn getTextureRenameHistory = _textureRenameHistory,
+    
+    -- 设置器方法
+    fn setIsProcessing state = (_isProcessing = state),
+    fn setMissingMaps maps = (_missingMaps = maps),
+    fn setTextureRenameHistory history = (_textureRenameHistory = history),
+    
+    -- 位图管理
+    fn registerBitmap bmap = (
+        if bmap != undefined do (
+            append _openBitmaps bmap
+        )
+    ),
+    
+    fn unregisterBitmap bmap = (
+        if bmap != undefined do (
+            local index = findItem _openBitmaps bmap
+            if index > 0 do (
+                deleteItem _openBitmaps index
+            )
+        )
+    ),
+    
+    -- .NET对象管理
+    fn registerDotNetObject obj = (
+        if obj != undefined do (
+            append _dotNetObjects obj
+        )
+    ),
+    
+    fn unregisterDotNetObject obj = (
+        if obj != undefined do (
+            local index = findItem _dotNetObjects obj
+            if index > 0 do (
+                deleteItem _dotNetObjects index
+            )
+        )
+    ),
+    
+    -- 字符串流管理
+    fn registerStringStream stream = (
+        if stream != undefined do (
+            append _stringStreams stream
+        )
+    ),
+    
+    -- 清理所有资源
+    fn cleanup = (
+        try (
+            -- 清理位图
+            for bmap in _openBitmaps do (
+                try (close bmap) catch ()
+            )
+            _openBitmaps = #()
+            
+            -- 清理.NET对象
+            for obj in _dotNetObjects do (
+                try (
+                    if obj != undefined do (
+                        obj.Dispose()
+                    )
+                ) catch ()
+            )
+            _dotNetObjects = #()
+            
+            -- 清理字符串流
+            for stream in _stringStreams do (
+                try (
+                    if stream != undefined do (
+                        free stream
+                    )
+                ) catch ()
+            )
+            _stringStreams = #()
+            
+            -- 清理数组
+            _missingMaps = #()
+            _textureRenameHistory = #()
+            
+            -- 强制垃圾回收
+            gc()
+            gc light:true
+            
+            format "全局资源清理完成\n"
+        ) catch (
+            format "资源清理时出错: %\n" (getCurrentException())
+        )
+    ),
+    
+    -- 获取内存使用统计
+    fn getMemoryStats = (
+        local stats = #(
+            #("位图数量", _openBitmaps.count),
+            #(".NET对象数量", _dotNetObjects.count),
+            #("字符串流数量", _stringStreams.count),
+            #("丢失贴图数量", _missingMaps.count),
+            #("重命名历史数量", _textureRenameHistory.count)
+        )
+        return stats
+    )
+)
+
+-- 安全位图操作结构
+struct SafeBitmapOperator (
+    fn withBitmap filePath operation = (
+        local bmap = undefined
+        local result = undefined
+        
+        try (
+            bmap = openBitMap filePath
+            if bmap != undefined then (
+                -- 注册到资源管理器
+                g_resourceManager.registerBitmap bmap
+                
+                -- 执行操作
+                result = operation bmap filePath
+            ) else (
+                result = #(false, "无法打开位图: " + filePath)
+            )
+        ) catch (
+            result = #(false, "位图操作异常: " + (getCurrentException()))
+        )
+        
+        -- 确保资源释放
+        if bmap != undefined do (
+            try (
+                close bmap
+                g_resourceManager.unregisterBitmap bmap
+            ) catch ()
+        )
+        
+        return result
+    ),
+    
+    -- 批量位图操作
+    fn withBitmaps filePaths operation = (
+        local results = #()
+        local openBitmaps = #()
+        
+        try (
+            -- 打开所有位图
+            for filePath in filePaths do (
+                local bmap = openBitMap filePath
+                if bmap != undefined then (
+                    append openBitmaps bmap
+                    g_resourceManager.registerBitmap bmap
+                )
+            )
+            
+            -- 执行批量操作
+            if openBitmaps.count > 0 then (
+                results = operation openBitmaps
+            )
+        ) catch (
+            results = #(false, "批量位图操作异常: " + (getCurrentException()))
+        )
+        
+        -- 清理所有位图
+        for bmap in openBitmaps do (
+            try (
+                close bmap
+                g_resourceManager.unregisterBitmap bmap
+            ) catch ()
+        )
+        
+        return results
+    )
+)
+
+-- 内存监控工具
+struct MemoryMonitor (
+    _lastMemoryUsage = 0,
+    _checkInterval = 5000, -- 5秒检查一次
+    _timer = undefined,
+    
+    fn startMonitoring = (
+        try (
+            _timer = dotNetObject "System.Windows.Forms.Timer"
+            _timer.Interval = _checkInterval
+            
+            -- 注册到资源管理器
+            g_resourceManager.registerDotNetObject _timer
+            
+            dotNet.addEventHandler _timer "Tick" checkMemoryUsage
+            _timer.Start()
+            
+            format "内存监控已启动\n"
+        ) catch (
+            format "启动内存监控失败: %\n" (getCurrentException())
+        )
+    ),
+    
+    fn stopMonitoring = (
+        try (
+            if _timer != undefined do (
+                _timer.Stop()
+                g_resourceManager.unregisterDotNetObject _timer
+                _timer.Dispose()
+                _timer = undefined
+            )
+            format "内存监控已停止\n"
+        ) catch (
+            format "停止内存监控失败: %\n" (getCurrentException())
+        )
+    ),
+    
+    fn checkMemoryUsage sender args = (
+        try (
+            -- 获取当前内存使用情况
+            local currentMemory = heapSize
+            local memoryDiff = currentMemory - _lastMemoryUsage
+            
+            -- 如果内存增长超过阈值，触发清理
+            if memoryDiff > 50000000 do ( -- 50MB阈值
+                format "检测到内存增长: %MB，触发清理\n" (memoryDiff / 1048576.0)
+                enhancedCleanupResources()
+            )
+            
+            _lastMemoryUsage = currentMemory
+            
+            -- 输出资源统计
+            if g_resourceManager != undefined do (
+                local stats = g_resourceManager.getMemoryStats()
+                format "资源统计: "
+                for stat in stats do (
+                    format "%: % " stat[1] stat[2]
+                )
+                format "\n"
+            )
+        ) catch (
+            format "内存检查出错: %\n" (getCurrentException())
+        )
+    )
+)
+
+-- 改进的资源清理函数
+fn enhancedCleanupResources = (
+    try (
+        -- 使用资源管理器清理
+        if g_resourceManager != undefined do (
+            g_resourceManager.cleanup()
+        )
+        
+        -- 清理材质库
+        purgeUnusedMtlLib()
+        
+        -- 清理位图代理
+        bitmapproxy.freeallbitmaps()
+        
+        -- 多次垃圾回收确保彻底清理
+        for i = 1 to 3 do (
+            gc()
+            gc light:true
+        )
+        
+        format "增强资源清理完成\n"
+    ) catch (
+        format "增强资源清理时出错: %\n" (getCurrentException())
+    )
+)
+
+-- 获取详细内存使用统计
+fn getDetailedMemoryStats = (
+    local stats = #()
+    
+    try (
+        format "开始收集内存使用统计数据...\n"
+        
+        -- 获取3ds Max堆内存信息
+        local totalHeap = heapSize()
+        local freeHeap = heapFree()
+        local usedHeap = totalHeap - freeHeap
+        
+        -- 转换为MB并格式化
+        local totalHeapMB = (totalHeap / 1048576.0) as string + " MB"
+        local freeHeapMB = (freeHeap / 1048576.0) as string + " MB"
+        local usedHeapMB = (usedHeap / 1048576.0) as string + " MB"
+        local usagePercent = (100 * (usedHeap as float / totalHeap as float)) as string + "%"
+        
+        -- 获取系统内存信息(如果支持)
+        local systemTotalMem = "未知"
+        local systemFreeMem = "未知"
+        local systemUsedMem = "未知"
+        local systemUsagePercent = "未知"
+        
+        try (
+            -- 尝试获取Windows内存信息
+            local sysMemory = sysInfo.getSystemMemoryInfo()
+            if sysMemory != undefined then (
+                -- 物理内存信息(MB)
+                systemTotalMem = (sysMemory.physicalMemoryTotal / 1048576.0) as string + " MB"
+                systemFreeMem = (sysMemory.physicalMemoryAvailable / 1048576.0) as string + " MB"
+                local sysUsed = sysMemory.physicalMemoryTotal - sysMemory.physicalMemoryAvailable
+                systemUsedMem = (sysUsed / 1048576.0) as string + " MB"
+                systemUsagePercent = (100 * (sysUsed as float / sysMemory.physicalMemoryTotal as float)) as string + "%"
+            )
+        ) catch (
+            format "获取系统内存信息失败: %\n" (getCurrentException())
+        )
+        
+        -- 获取场景统计信息
+        local objectsCount = "未知"
+        local materialsCount = "未知"
+        local texturesCount = "未知"
+        
+        try (
+            objectsCount = objects.count as string + " 个"
+            materialsCount = sceneMaterials.count as string + " 个"
+            
+            -- 统计唯一的贴图文件数量
+            local uniqueTexturePaths = #()
+            for mat in sceneMaterials do (
+                if classof mat == MultiMaterial then (
+                    for i = 1 to mat.numsubs do (
+                        local subMat = mat[i]
+                        if subMat != undefined then (
+                            local diffuseMap = case classof subMat of (
+                                StandardMaterial: subMat.diffuseMap
+                                VRayMtl: subMat.texmap_diffuse
+                                PhysicalMaterial: subMat.base_color_map
+                                default: undefined
+                            )
+                            
+                            if diffuseMap != undefined and diffuseMap.filename != undefined then (
+                                if findItem uniqueTexturePaths diffuseMap.filename == 0 then (
+                                    append uniqueTexturePaths diffuseMap.filename
+                                )
+                            )
+                        )
+                    )
+                ) else (
+                    local diffuseMap = case classof mat of (
+                        StandardMaterial: mat.diffuseMap
+                        VRayMtl: mat.texmap_diffuse
+                        PhysicalMaterial: mat.base_color_map
+                        default: undefined
+                    )
+                    
+                    if diffuseMap != undefined and diffuseMap.filename != undefined then (
+                        if findItem uniqueTexturePaths diffuseMap.filename == 0 then (
+                            append uniqueTexturePaths diffuseMap.filename
+                        )
+                    )
+                )
+            )
+            texturesCount = uniqueTexturePaths.count as string + " 个"
+            uniqueTexturePaths = undefined -- 释放内存
+        ) catch (
+            format "获取场景统计信息失败: %\n" (getCurrentException())
+        )
+        
+        -- 获取资源管理器统计(如果有)
+        local resourceStats = #()
+        try (
+            if g_resourceManager != undefined then (
+                resourceStats = g_resourceManager.getMemoryStats()
+            )
+        ) catch (
+            format "获取资源管理器统计失败: %\n" (getCurrentException())
+        )
+        
+        -- 合并所有统计
+        append stats #("3ds Max内存总量", totalHeapMB)
+        append stats #("3ds Max已用内存", usedHeapMB)
+        append stats #("3ds Max可用内存", freeHeapMB)
+        append stats #("3ds Max内存使用率", usagePercent)
+        append stats #("系统内存总量", systemTotalMem)
+        append stats #("系统已用内存", systemUsedMem)
+        append stats #("系统可用内存", systemFreeMem)
+        append stats #("系统内存使用率", systemUsagePercent)
+        append stats #("场景物体数量", objectsCount)
+        append stats #("材质总数", materialsCount)
+        append stats #("贴图总数", texturesCount)
+        
+        -- 添加资源管理器统计
+        for stat in resourceStats do (
+            append stats stat
+        )
+        
+        format "内存统计数据收集完成，共%项\n" stats.count
+    ) catch (
+        format "获取内存统计时出错: %\n" (getCurrentException())
+        -- 确保至少返回一些基本数据
+        try (
+            append stats #("3ds Max内存总量", (heapSize() / 1048576.0) as string + " MB")
+            append stats #("3ds Max可用内存", (heapFree() / 1048576.0) as string + " MB") 
+        ) catch (
+            append stats #("状态", "内存统计获取失败")
+        )
+    )
+    
+    return stats
+)
+
+-- 优化的位图尺寸检查函数
+fn optimizedCheckTextureSize filePath = (
+    return g_bitmapOperator.withBitmap filePath (
+        fn checkSize bmap filePath = (
+            try (
+                local w = bmap.width as integer
+                local h = bmap.height as integer
+                
+                if w <= 0 or h <= 0 then (
+                    return #(false, "无效尺寸")
+                )
+                
+                -- 检查是否为2的幂次方
+                local isPowerW = isPowerOfTwo w
+                local isPowerH = isPowerOfTwo h
+                
+                if not isPowerW or not isPowerH then (
+                    return #(false, w as string + "x" + h as string)
+                )
+                
+                return #(true, w as string + "x" + h as string)
+            ) catch (
+                return #(false, "检查失败: " + (getCurrentException()))
+            )
+        )
+    )
+)
+
+-- 创建全局实例
+global g_resourceManager = GlobalResourceManager()
+global g_bitmapOperator = SafeBitmapOperator()
+global g_memoryMonitor = MemoryMonitor()
+
 -- 基础函数定义
 -- 确保formatNumberWithLeadingZeros是全局函数
 global formatNumberWithLeadingZeros
@@ -41,48 +482,151 @@ fn isPowerOfTwo n = (
 )
 
 fn checkTextureSize bmap = (
-    try (
-        -- 首先检查输入参数是否有效
-        if bmap == undefined then return #(false, "无效贴图")
-        
-        -- 确保获取到有效的宽高值
-        local w = undefined
-        local h = undefined
-        
+    -- 如果直接传入位图对象
+    if bmap != undefined then (
         try (
-            w = bmap.width as integer
-            h = bmap.height as integer
+            -- 首先检查输入参数是否有效
+            if bmap == undefined then return #(false, "无效贴图")
+            
+            -- 确保获取到有效的宽高值
+            local w = undefined
+            local h = undefined
+            
+            try (
+                w = bmap.width as integer
+                h = bmap.height as integer
+            ) catch (
+                return #(false, "无法获取贴图尺寸")
+            )
+            
+            -- 检查是否获取到有效值
+            if w == undefined or h == undefined or w <= 0 or h <= 0 then (
+                return #(false, "无效尺寸")
+            )
+            
+            -- 检查是否为2的幂次方
+            local isPowerW = isPowerOfTwo w
+            local isPowerH = isPowerOfTwo h
+            
+            if not isPowerW or not isPowerH then (
+                return #(false, w as string + "x" + h as string)
+            )
+            
+            return #(true, w as string + "x" + h as string)
         ) catch (
-            return #(false, "无法获取贴图尺寸")
+            return #(false, "检查失败: " + (getCurrentException()))
         )
-        
-        -- 检查是否获取到有效值
-        if w == undefined or h == undefined or w <= 0 or h <= 0 then (
-            return #(false, "无效尺寸")
-        )
-        
-        -- 检查是否为2的幂次方
-        local isPowerW = isPowerOfTwo w
-        local isPowerH = isPowerOfTwo h
-        
-        if not isPowerW or not isPowerH then (
-            return #(false, w as string + "x" + h as string)
-        )
-        
-        return #(true, w as string + "x" + h as string)
-    ) catch (
-        return #(false, "检查失败: " + (getCurrentException()))
+    ) else (
+        -- 如果传入的是文件路径，使用安全位图操作器
+        return optimizedCheckTextureSize bmap
     )
 )
 
 -- 全局变量声明
-global missingMaps = #()
-global isProcessing = false
+-- 全局变量现在由资源管理器管理
+-- global missingMaps = #()
+-- global isProcessing = false
+
+-- 内存统计更新计时器
+global updateMemoryStatsTimer = undefined
+
+-- 启动内存统计更新计时器
+fn startMemoryStatsTimer interval:5000 = (
+    try (
+        format "开始启动内存统计更新计时器...\n"
+        
+        -- 如果已经有计时器在运行，先停止
+        if updateMemoryStatsTimer != undefined do (
+            try (
+                updateMemoryStatsTimer.Stop()
+                g_resourceManager.unregisterDotNetObject updateMemoryStatsTimer
+                updateMemoryStatsTimer.Dispose()
+            ) catch (
+                format "停止旧计时器出错: %\n" (getCurrentException())
+            )
+            updateMemoryStatsTimer = undefined
+        )
+        
+        -- 创建新的计时器
+        updateMemoryStatsTimer = dotNetObject "System.Windows.Forms.Timer"
+        updateMemoryStatsTimer.Interval = interval
+        
+        -- 注册到资源管理器
+        g_resourceManager.registerDotNetObject updateMemoryStatsTimer
+        
+        -- 定义更新函数
+        fn memoryStatsTimerTick sender args = (
+            try (
+                -- 直接在计时器中添加数据，避免依赖其他函数
+                if lvMemoryStats != undefined and lvMemoryStats.visible then (
+                    try (
+                        -- 更新基本内存数据
+                        local totalHeap = heapSize()
+                        local freeHeap = heapFree()
+                        local usedHeap = totalHeap - freeHeap
+                        local totalHeapMB = (totalHeap / 1048576.0) as string + " MB"
+                        local freeHeapMB = (freeHeap / 1048576.0) as string + " MB"
+                        
+                        -- 检查是否已有这些项
+                        local foundItems = #()
+                        for i = 0 to lvMemoryStats.Items.Count - 1 do (
+                            local itemName = lvMemoryStats.Items.Item[i].Text
+                            append foundItems itemName
+                            
+                            -- 更新现有数据
+                            if itemName == "3ds Max内存总量" then 
+                                lvMemoryStats.Items.Item[i].SubItems.Item[1].Text = totalHeapMB
+                            else if itemName == "3ds Max可用内存" then
+                                lvMemoryStats.Items.Item[i].SubItems.Item[1].Text = freeHeapMB
+                        )
+                        
+                        -- 如果没有找到这些项，尝试调用完整更新
+                        if foundItems.count == 0 then (
+                            updateMemoryStats()
+                        )
+                    ) catch (
+                        format "计时器中更新内存数据失败: %\n" (getCurrentException())
+                    )
+                )
+            ) catch (
+                format "内存统计更新时出错: %\n" (getCurrentException())
+            )
+        )
+        
+        -- 添加事件处理
+        dotNet.addEventHandler updateMemoryStatsTimer "Tick" memoryStatsTimerTick
+        updateMemoryStatsTimer.Start()
+        
+        format "内存统计更新计时器已启动，间隔: %毫秒\n" interval
+        return true
+    ) catch (
+        format "启动内存统计更新计时器失败: %\n" (getCurrentException())
+        return false
+    )
+)
+
+-- 停止内存统计更新计时器
+fn stopMemoryStatsTimer = (
+    try (
+        if updateMemoryStatsTimer != undefined do (
+            updateMemoryStatsTimer.Stop()
+            g_resourceManager.unregisterDotNetObject updateMemoryStatsTimer
+            updateMemoryStatsTimer.Dispose()
+            updateMemoryStatsTimer = undefined
+            format "内存统计更新计时器已停止\n"
+        )
+        return true
+    ) catch (
+        format "停止内存统计更新计时器失败: %\n" (getCurrentException())
+        return false
+    )
+)
 
 -- 资源管理相关函数
 fn cleanupDotNetObject obj = (
     try (
         if obj != undefined do (
+            g_resourceManager.unregisterDotNetObject obj
             obj.Dispose()
             obj = undefined
         )
@@ -90,19 +634,8 @@ fn cleanupDotNetObject obj = (
 )
 
 fn cleanupResources = (
-    try (
-        -- 清理全局变量
-        if missingMaps != undefined do (
-            missingMaps = #()
-            missingMaps = undefined
-        )
-        
-        -- 强制垃圾回收
-        gc()
-        gc light:true
-    ) catch (
-        format "清理资源时出错: %\n" (getCurrentException())
-    )
+    -- 使用增强的资源清理函数
+    enhancedCleanupResources()
 )
 
 fn cleanupListView lv = (
@@ -112,7 +645,8 @@ fn cleanupListView lv = (
             lv.Items.Clear()
             -- 清空列
             lv.Columns.Clear()
-            -- 释放资源
+            -- 从资源管理器注销并释放资源
+            g_resourceManager.unregisterDotNetObject lv
             cleanupDotNetObject lv
         )
     ) catch (
@@ -123,6 +657,9 @@ fn cleanupListView lv = (
 fn cleanupBitmap bmap = (
     try (
         if bmap != undefined do (
+            -- 从资源管理器中注销位图
+            g_resourceManager.unregisterBitmap bmap
+            -- 关闭并清理位图
             close bmap
             bmap = undefined
         )
@@ -776,6 +1313,10 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
     groupBox grpLog "操作日志" pos:[420,170] width:200 height:140
     dotNetControl edtLog "System.Windows.Forms.RichTextBox" pos:[430,190] width:180 height:110
 
+    -- 右侧内存监控伸缩面板
+    groupBox grpMemoryPanel "内存统计" pos:[640,10] width:250 height:380 visible:false
+    dotNetControl lvMemoryStats "System.Windows.Forms.ListView" pos:[650,30] width:230 height:350 visible:false
+
     -- 新增折叠区域按钮
     button btnCollapsible "高级选项 ▼" pos:[400,380] width:100 height:30 tooltip:"点击展开或折叠高级选项区域（此功能暂未完善）"
     
@@ -784,6 +1325,7 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
     -- 在可折叠区域中添加一些控件
     button btnAdvanced1 "贴图回退" pos:[20,450] width:100 height:30 visible:false tooltip:"查看贴图重命名历史记录，可以撤销重命名操作"
     button btnCheckUpdate "检查更新" pos:[20,490] width:100 height:30 visible:false tooltip:"检查插件的最新版本"
+    checkbox chkEnableMemoryMonitor "内存监控" pos:[140,450] width:90 height:30 checked:false visible:false tooltip:"勾选此项启用内存监控，自动释放未使用的资源"
     
     -- ID限制下拉框和标签
     label lblIDLimit "ID限制:" pos:[335,370] width:50 height:20 tooltip:"设置材质ID的最大数量限制"
@@ -794,6 +1336,9 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
 
     -- 添加修复贴图尺寸按钮
     button btnFixTextures "修复贴图尺寸" pos:[335,340] width:100 height:20 tooltip:"尝试修复非2次幂尺寸的贴图"
+    
+    -- 添加内存监控按钮
+    -- 内存监控单选框已移至高级选项区域
     
     -- 按钮
     button btnCheck "检查" pos:[10,320] width:100 height:40 tooltip:"检查场景中丢失的贴图和非2次幂尺寸的贴图"
@@ -844,6 +1389,25 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
                 
             if btnCheckUpdate != undefined then
                 btnCheckUpdate.visible = isCollapsibleVisible
+                
+            if chkEnableMemoryMonitor != undefined then
+                chkEnableMemoryMonitor.visible = isCollapsibleVisible
+            
+            -- 如果展开了折叠区域，检查内存监控复选框状态
+            if isCollapsibleVisible and chkEnableMemoryMonitor != undefined and chkEnableMemoryMonitor.checked then (
+                -- 显示内存统计面板
+                if grpMemoryPanel != undefined then grpMemoryPanel.visible = true
+                if lvMemoryStats != undefined then (
+                    lvMemoryStats.visible = true
+                    -- 如果表格未初始化，则初始化
+                    if lvMemoryStats.Columns.Count == 0 then (
+                        initMemoryStatsListView()
+                        updateMemoryStats()
+                    )
+                )
+                -- 调整窗口宽度以适应内存统计面板
+                try(replaceMissingMapsRollout.width = 900)catch()
+            )
             
             -- 调整对话框高度
             local newHeight = if isCollapsibleVisible then expandedHeight else dialogHeight
@@ -933,6 +1497,123 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
         -- 设置列总宽度以避免出空列
         lvModels.width = 400  -- 调整总宽度为所有列宽之和
     )
+    
+    -- 初始化内存统计表格
+    fn initMemoryStatsListView = (
+        try (
+            format "开始初始化内存统计表格...\n"
+            
+            if lvMemoryStats != undefined then (
+                -- 基本设置
+                lvMemoryStats.View = lvMemoryStats.View.Details
+                lvMemoryStats.GridLines = true
+                lvMemoryStats.FullRowSelect = true
+                lvMemoryStats.MultiSelect = false
+                lvMemoryStats.HeaderStyle = (dotNetClass "System.Windows.Forms.ColumnHeaderStyle").Nonclickable
+                
+                -- 清除现有列并添加新列
+                lvMemoryStats.Columns.Clear()
+                local col1 = lvMemoryStats.Columns.Add "统计项目" 130
+                local col2 = lvMemoryStats.Columns.Add "数值" 90
+                
+                -- 设置样式
+                lvMemoryStats.BackColor = (dotNetClass "System.Drawing.Color").FromArgb 240 240 240
+                lvMemoryStats.ForeColor = (dotNetClass "System.Drawing.Color").Black
+                lvMemoryStats.BorderStyle = (dotNetClass "System.Windows.Forms.BorderStyle").Fixed3D
+                
+                -- 设置字体
+                try(
+                    local newFont = dotNetObject "System.Drawing.Font" "Arial" 9
+                    lvMemoryStats.Font = newFont
+                    g_resourceManager.registerDotNetObject newFont
+                )catch()
+                
+                -- 添加初始测试项
+                try(
+                    local item = dotNetObject "System.Windows.Forms.ListViewItem" "初始化测试"
+                    item.SubItems.Add "成功"
+                    item.ForeColor = (dotNetClass "System.Drawing.Color").Green
+                    lvMemoryStats.Items.Add item
+                )catch()
+                
+                -- 注册到资源管理器
+                g_resourceManager.registerDotNetObject lvMemoryStats
+                
+                format "内存统计表格初始化成功\n"
+                return true
+            ) else (
+                format "内存统计表格控件未找到\n"
+                return false
+            )
+        ) catch (
+            format "初始化内存统计表格时出错: %\n" (getCurrentException())
+            return false
+        )
+    )
+    
+    -- 更新内存统计数据
+    fn updateMemoryStats = (
+        try (
+            if lvMemoryStats != undefined then (
+                -- 清空表格
+                lvMemoryStats.Items.Clear()
+                lvMemoryStats.BeginUpdate()
+                
+                -- 获取统计数据
+                local stats = getDetailedMemoryStats()
+                
+                -- 记录到日志以便调试
+                format "内存统计数据更新，共%项\n" stats.count
+                
+                -- 如果没有数据，添加一些默认项
+                if stats.count == 0 do (
+                    append stats #("3ds Max内存总量", (heapSize() / 1048576.0) as string + " MB")
+                    append stats #("3ds Max可用内存", (heapFree() / 1048576.0) as string + " MB")
+                    format "添加默认内存统计项\n"
+                )
+                
+                -- 添加到表格
+                for stat in stats do (
+                    try (
+                        -- 确保数据有效
+                        local statName = if stat[1] != undefined then stat[1] as string else "未知项"
+                        local statValue = if stat[2] != undefined then stat[2] as string else "未知值"
+                        
+                        local item = dotNetObject "System.Windows.Forms.ListViewItem" statName
+                        item.SubItems.Add statValue
+                        
+                        -- 设置颜色样式(可选)
+                        if matchPattern statName pattern:"*使用率*" then (
+                            local usageValue = substituteString statValue "%" ""
+                            try (
+                                local usage = usageValue as float
+                                if usage > 90.0 then
+                                    item.ForeColor = (dotNetClass "System.Drawing.Color").Red
+                                else if usage > 70.0 then
+                                    item.ForeColor = (dotNetClass "System.Drawing.Color").Orange
+                                else
+                                    item.ForeColor = (dotNetClass "System.Drawing.Color").Green
+                            ) catch()
+                        )
+                        
+                        lvMemoryStats.Items.Add item
+                    ) catch (
+                        format "添加内存统计项时出错: %\n" (getCurrentException())
+                    )
+                )
+                
+                lvMemoryStats.EndUpdate()
+                format "内存统计表格更新完成\n"
+                return true
+            ) else (
+                format "内存统计表格控件未找到\n"
+            )
+            return false
+        ) catch (
+            format "更新内存统计表格时出错: %\n" (getCurrentException())
+            return false
+        )
+    )
 
     -- 检查缺少的文件
     fn checkMissingFiles = (
@@ -943,10 +1624,8 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
         
         try (
             local startTime = timestamp()
-            if missingMaps != undefined do (
-                missingMaps = #()
-                gc light:true
-            )
+            -- 初始化 missingMaps
+            g_resourceManager.setMissingMaps #()
             
             if lvModels != undefined do (
                 lvModels.Items.Clear()
@@ -986,7 +1665,9 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
                                             -- 处理丢失贴图...
                                             local fileBaseName = getFilenameFile fileName
                                             local fileExtension = getFilenameType fileName
-                                            append missingMaps #(obj.name, subMat.name, i, fileBaseName + fileExtension)
+                                            local currentMissingMaps = g_resourceManager.getMissingMaps()
+                                            append currentMissingMaps #(obj.name, subMat.name, i, fileBaseName + fileExtension)
+                                            g_resourceManager.setMissingMaps currentMissingMaps
                                             
                                             if findItem uniqueMissingMaps (fileBaseName + fileExtension) == 0 do (
                                                 append uniqueMissingMaps (fileBaseName + fileExtension)
@@ -999,8 +1680,7 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
                                             )
                                         ) else if checkSize do (
                                             -- 检查贴图尺寸
-                                            local bmap = openBitMap fileName
-                                            local sizeCheck = checkTextureSize bmap
+                                            local sizeCheck = optimizedCheckTextureSize fileName
                                             if not sizeCheck[1] do (
                                                 local listItem = dotNetObject "System.Windows.Forms.ListViewItem" obj.name
                                                 listItem.SubItems.Add subMat.name
@@ -1033,7 +1713,9 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
                                     -- 处理丢失贴图...
                                     local fileBaseName = getFilenameFile fileName
                                     local fileExtension = getFilenameType fileName
-                                    append missingMaps #(obj.name, mat.name, 1, fileBaseName + fileExtension)
+                                    local currentMissingMaps = g_resourceManager.getMissingMaps()
+                                    append currentMissingMaps #(obj.name, mat.name, 1, fileBaseName + fileExtension)
+                                    g_resourceManager.setMissingMaps currentMissingMaps
                                     
                                     if findItem uniqueMissingMaps (fileBaseName + fileExtension) == 0 do (
                                         append uniqueMissingMaps (fileBaseName + fileExtension)
@@ -1067,7 +1749,8 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
             )
 
             -- 更新列表显示丢失的贴图
-            for map in missingMaps do (
+            local currentMissingMaps = g_resourceManager.getMissingMaps()
+            for map in currentMissingMaps do (
                 local item = dotNetObject "System.Windows.Forms.ListViewItem" map[1]
                 item.SubItems.Add map[2]
                 item.SubItems.Add (map[3] as string)
@@ -1159,8 +1842,8 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
 
     -- 检查按钮点击事件
     on btnCheck pressed do (
-        if isProcessing do return()
-        isProcessing = true
+        if g_resourceManager.getIsProcessing() do return()
+        g_resourceManager.setIsProcessing true
         disableButton btnCheck
         
         try (
@@ -1210,14 +1893,9 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
                                         append missingMaps #(obj.name, subMat.name, i, filenameFromPath fileName)
                                         missingCount += 1
                                     ) else if checkSize do (
-                                        local bmap = undefined
                                         try (
-                                            bmap = openBitMap fileName
-                                            if bmap != undefined then (
-                                                local sizeCheck = undefined
-                                                try (
-                                                    sizeCheck = checkTextureSize bmap
-                                                    if sizeCheck != undefined and not sizeCheck[1] do (
+                                            local sizeCheck = optimizedCheckTextureSize fileName
+                                            if sizeCheck != undefined and not sizeCheck[1] do (
                                                         local listItem = dotNetObject "System.Windows.Forms.ListViewItem" obj.name
                                                         listItem.SubItems.Add subMat.name
                                                         listItem.SubItems.Add (i as string)
@@ -1229,12 +1907,7 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
                                                 ) catch (
                                                     format "检查贴图尺寸时出错: %\n" (getCurrentException())
                                                 )
-                                            )
-                                        ) catch (
-                                            format "打开贴图 % 时出错: %\n" fileName (getCurrentException())
-                                        ) finally (
-                                            if bmap != undefined do close bmap
-                                        )
+                                            
                                     )
                                 )
                             )
@@ -1264,14 +1937,9 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
                                 append missingMaps #(obj.name, obj.material.name, 1, filenameFromPath fileName)
                                 missingCount += 1
                             ) else if checkSize do (
-                                local bmap = undefined
                                 try (
-                                    bmap = openBitMap fileName
-                                    if bmap != undefined then (
-                                        local sizeCheck = undefined
-                                        try (
-                                            sizeCheck = checkTextureSize bmap
-                                            if sizeCheck != undefined and not sizeCheck[1] do (
+                                    local sizeCheck = optimizedCheckTextureSize fileName
+                                    if sizeCheck != undefined and not sizeCheck[1] do (
                                                 local listItem = dotNetObject "System.Windows.Forms.ListViewItem" obj.name
                                                 listItem.SubItems.Add obj.material.name
                                                 listItem.SubItems.Add "1"
@@ -1283,12 +1951,7 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
                                         ) catch (
                                             format "检查贴图尺寸时出错: %\n" (getCurrentException())
                                         )
-                                    )
-                                ) catch (
-                                    format "打开贴图 % 时出错: %\n" fileName (getCurrentException())
-                                ) finally (
-                                    if bmap != undefined do close bmap
-                                )
+                                    
                             )
                         )
                     )
@@ -1314,7 +1977,7 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
             messageBox ("检查贴图时发生错误：" + (getCurrentException())) title:"错误"
         )
         
-        isProcessing = false
+        g_resourceManager.setIsProcessing false
         enableButton btnCheck
     )
 
@@ -1405,7 +2068,8 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
                 checkMissingFiles()
                 
                 -- 检查完成后，如果没有丢失的贴图则提示并返回
-                if missingMaps.count == 0 then (
+                local currentMissingMaps = g_resourceManager.getMissingMaps()
+                if currentMissingMaps.count == 0 then (
                     messageBox "未检测到能替换的贴图！" title:"提示"
                     enableButton btnReplace
                     return undefined
@@ -1417,7 +2081,7 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
                 if selectedFile != undefined then (
                     -- 使用临时数组存储需要处理的对象
                     local mapsToProcess = #()
-                    join mapsToProcess missingMaps
+                    join mapsToProcess (g_resourceManager.getMissingMaps())
                     
                     for map in mapsToProcess do (
                         try (
@@ -1506,7 +2170,7 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
             ) else (
                 
                 checkMissingFiles()
-                missingMaps
+                g_resourceManager.getMissingMaps()
             )
             
             -- 检查是否有需要处理的项目
@@ -1854,8 +2518,8 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
 
     -- 转化为标准材质按钮点击事件
     on btnConvertToStandard pressed do (
-        if isProcessing do return()
-        isProcessing = true
+        if g_resourceManager.getIsProcessing() do return()
+        g_resourceManager.setIsProcessing true
         disableButton btnConvertToStandard
         try (
             local startTime = timestamp()
@@ -1888,14 +2552,14 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
         ) catch (
             messageBox ("转换质时发生错误：" + (getCurrentException())) title:"错误"
         )
-        isProcessing = false
+        g_resourceManager.setIsProcessing false
         enableButton btnConvertToStandard
     )
 
     -- 转化为VR材质按钮点击事件
     on btnConvertToVR pressed do (
-        if isProcessing do return()
-        isProcessing = true
+        if g_resourceManager.getIsProcessing() do return()
+        g_resourceManager.setIsProcessing true
         disableButton btnConvertToVR
         try (
             local startTime = timestamp()
@@ -1928,7 +2592,7 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
         ) catch (
             messageBox ("转换材质时发生错误：" + (getCurrentException())) title:"错误"
         )
-        isProcessing = false
+        g_resourceManager.setIsProcessing false
         enableButton btnConvertToVR
     )
 
@@ -2777,8 +3441,8 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
     )
 
     on btnCheckModelID pressed do (
-        if isProcessing do return()
-        isProcessing = true
+        if g_resourceManager.getIsProcessing() do return()
+        g_resourceManager.setIsProcessing true
         disableButton btnCheckModelID
         try (
             local startTime = timestamp()
@@ -2889,7 +3553,7 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
         ) catch (
             messageBox ("检查模型ID时发生错误：" + (getCurrentException())) title:"错误"
         )
-        isProcessing = false
+        g_resourceManager.setIsProcessing false
         enableButton btnCheckModelID
     )
 
@@ -2954,319 +3618,181 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
             if grpCollapsible != undefined then grpCollapsible.visible = false
             if btnAdvanced1 != undefined then btnAdvanced1.visible = false
             if btnCheckUpdate != undefined then btnCheckUpdate.visible = false
+            if chkEnableMemoryMonitor != undefined then chkEnableMemoryMonitor.visible = false
+            
+            -- 初始化内存统计面板为隐藏状态
+            if grpMemoryPanel != undefined then grpMemoryPanel.visible = false
+            if lvMemoryStats != undefined then lvMemoryStats.visible = false
             
             -- 记录日志
             insertLog "工具已启动，准备就绪。" clearPrevious:true
+            
+                            -- 启动内存监控(如果已勾选)
+                if chkEnableMemoryMonitor != undefined and chkEnableMemoryMonitor.checked do (
+                    -- 启动内存监控
+                    g_memoryMonitor.startMonitoring()
+                    insertLog "内存监控已启动，将自动管理资源。"
+                    
+                    -- 显示右侧内存统计面板
+                    if grpMemoryPanel != undefined then grpMemoryPanel.visible = true
+                    if lvMemoryStats != undefined then (
+                        lvMemoryStats.visible = true
+                        
+                        -- 初始化内存统计表格
+                        initMemoryStatsListView()
+                        
+                        -- 立即更新一次统计数据
+                        updateMemoryStats()
+                        
+                        -- 启动定时更新
+                        startMemoryStatsTimer()
+                        
+                        -- 输出调试日志
+                        format "内存统计面板初始化完成\n"
+                    )
+                    
+                    -- 调整主窗口宽度以适应内存统计面板
+                    replaceMissingMapsRollout.width = 900
+                )
         ) catch (
             messageBox ("初始化界面时发生错误：" + (getCurrentException())) title:"错误"
         )
     )
 
-    -- 在 replaceMissingMapsRollout rollout 中添加 setMaterial 函数
-    fn setMaterial = (
-        local startTime = timestamp()
-        local processedCount = 0
-        local errorCount = 0
-        local emptyMatCount = 0
-        
-        -- 清空列表
-        lvModels.Items.Clear()
-        
-        for item in selection do (
-            if item.material != undefined then (
-                if (classof item.material == Multimaterial) then (
-                    try (
-                        local hasEmptyMat = false
-                        -- 检查多重材质中是否有空材质
-                        for i = 1 to item.material.numsubs do (
-                            if item.material[i] == undefined then (
-                                -- 添加到列表中
-                                local listItem = dotNetObject "System.Windows.Forms.ListViewItem" item.name
-                                listItem.SubItems.Add "多重材质"
-                                listItem.SubItems.Add (i as string)
-                                listItem.SubItems.Add ""
-                                listItem.SubItems.Add "材质ID " + i as string + " 为空"
-                                listItem.ForeColor = (dotNetClass "System.Drawing.Color").Red
-                                lvModels.Items.Add listItem
-                                
-                                hasEmptyMat = true
-                                emptyMatCount += 1
-                            )
-                        )
-                        
-                        -- 如果没有空材质，则进行命名
-                        if not hasEmptyMat then (
-                            -- 优化材质
-                            optimaizeMat item
-                            if(_setMaterialName item.material) then (
-                                item.material.name = "MAT_" + substring item.name 4 item.name.count
-                                processedCount += 1
-                            )
-                            else (
-                                errorCount += 1
-                            )
-                        )
-                    ) catch (
-                        errorCount += 1
-                        format "Error processing multimaterial: %\n" (getCurrentException())
-                    )
-                )
-                else (
-                    if(_setMaterialName item.material) then (
-                        processedCount += 1
-                    )
-                    else (
-                        errorCount += 1
-                    )
-                )
-            )
-            else (
-                -- 添加无材质的物体到列表
-                local listItem = dotNetObject "System.Windows.Forms.ListViewItem" item.name
-                listItem.SubItems.Add "无材质"
-                listItem.SubItems.Add "0"
-                listItem.SubItems.Add ""
-                listItem.SubItems.Add "物体无材质"
-                listItem.ForeColor = (dotNetClass "System.Drawing.Color").Red
-                lvModels.Items.Add listItem
-                emptyMatCount += 1
-            )
-        )
-        
-        try(displayMat()) catch()
-        
-        local endTime = timestamp()
-        local elapsedTime = (endTime - startTime) / 1000.0
-        
-        -- 生成日志信
-        local logMessage = "------------------------ \r\n"
-        logMessage += "材质命名完成\r\n"
-        logMessage += "成功处理材质数: " + processedCount as string + "\r\n"
-        if errorCount > 0 then (
-            logMessage += "处理失败数: " + errorCount as string + "\r\n"
-        )
-        if emptyMatCount > 0 then (
-            logMessage += "空材质/无材质数: " + emptyMatCount as string + "\r\n"
-        )
-        logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
-        logMessage += "------------------------ \r\n"
-        
-        -- 更新日志
-        insertLog logMessage
-    )
-
-    -- 修改贴图命名材质按钮的事件处理程序
-    on btn_namemat pressed do (
-        if selection.count == 0 then
-        (
-            messageBox "请先选择要处理的模型！" title:"提示"
-            return undefined
-        )
-        
-        setMaterial()
-    )
-
-    -- 添加超链接
-    hyperLink lnkGithub "Github仓库.使用说明" pos:[520,390] width:120 height:20 address:"https://github.com/Rkesent/3DMAX_Integrated-plugins" color:(color 100 149 237)
-    
-    -- 添加超链接点击事件
-    on lnkGithub clicked do
-    (
+    -- 内存监控复选框事件
+    on chkEnableMemoryMonitor changed state do (
         try (
-            shellLaunch lnkGithub.address ""
-        ) catch (
-            messageBox "无法打开链接;请检查网络链接" title:"错误"
-        )
-    )
-
-    -- 添加获取最近2的幂次方数的函数
-    fn getNearestPowerOfTwo n = (
-        if n <= 0 then return 1
-        local power = 1
-        while power < n do power *= 2
-        -- 检查哪个2的幂次方更接近
-        local lowerPower = power / 2
-        if (n - lowerPower) < (power - n) then
-            return lowerPower
-        return power
-    )
-
-    -- 修改贴图修复函数
-    fn fixTextureSize oldPath = (
-        try (
-            -- 检查文件是否存在和可访问
-            if not doesFileExist oldPath then return #(false, "文件不存在")
-            
-            -- 加载原始贴图
-            local bmap = openBitMap oldPath
-            if bmap == undefined then return #(false, "无法打开贴图")
-            
-            -- 获取尺寸
-            local w = bmap.width
-            local h = bmap.height
-            
-            -- 计算新的尺寸
-            local newW = getNearestPowerOfTwo w
-            local newH = getNearestPowerOfTwo h
-            
-            -- 如果尺寸已经是2的幂次方，则不需要处理
-            if w == newW and h == newH then (
-                close bmap
-                return #(true, "尺寸已符合要求")
-            )
-            
-            -- 创建临时文件名
-            local fileDir = getFilenamePath oldPath
-            local fileName = getFilenameFile oldPath
-            local fileExt = getFilenameType oldPath
-            local tempPath = fileDir + fileName + "_temp" + fileExt
-            
-            -- 创建新的位图
-            local newBmap = bitmap newW newH filename:tempPath
-            
-            -- 复制并缩放图像
-            copy bmap newBmap
-            
-            -- 保存新图像
-            save newBmap
-            
-            -- 清理资源
-            close bmap
-            close newBmap
-            
-            -- 替换原文件
-            if doesFileExist tempPath then (
-                try(deleteFile oldPath)catch()
-                try(renameFile tempPath oldPath)catch(
-                    -- 如果重命名失败，尝试复制后删除
-                    copyFile tempPath oldPath
-                    deleteFile tempPath
-                )
-            )
-            
-            return #(true, "已修改为 " + newW as string + "x" + newH as string)
-            
-        ) catch (
-            -- 记录错误信息
-            local errMsg = getCurrentException()
-            format "修复贴图出错: %\n" errMsg
-            return #(false, "修失: " + errMsg)
-        )
-    )
-
-    -- 在UI中添加修复按钮事件处理
-    on btnFixTextures pressed do (
-        if lvModels.Items.Count == 0 then (
-            messageBox "请先执行贴图检查！" title:"提示"
-            return undefined
-        )
-        
-        try (
-            local startTime = timestamp()
-            local fixedCount = 0
-            local errorCount = 0
-            local processedFiles = #()
-            
-            -- 获取选中的项目，如果没有选中则处理所有项目
-            local itemsToProcess = if lvModels.SelectedItems.Count > 0 then (
-                for i = 0 to lvModels.SelectedItems.Count - 1 collect lvModels.SelectedItems.Item[i]
-            ) else (
-                for i = 0 to lvModels.Items.Count - 1 collect lvModels.Items.Item[i]
-            )
-            
-            with redraw off (
-                for item in itemsToProcess do (
-                    local objName = item.Text
-                    local matName = item.SubItems.Item[1].Text
-                    local fileName = item.SubItems.Item[3].Text
+            if state then (
+                -- 启动内存监控
+                g_memoryMonitor.startMonitoring()
+                insertLog "内存监控已启动，将自动管理资源。"
+                
+                -- 显示右侧内存统计面板
+                if grpMemoryPanel != undefined then grpMemoryPanel.visible = true else format "统计面板未找到\n"
+                
+                -- 调整主窗口宽度以适应内存统计面板
+                try (replaceMissingMapsRollout.width = 900) catch (format "调整窗口宽度出错\n")
+                
+                -- 确保表格控件可用
+                if lvMemoryStats != undefined then (
+                    format "找到内存统计表格控件\n"
+                    lvMemoryStats.visible = true
                     
-                    -- 获取对象
-                    local obj = getNodeByName objName
-                    if obj != undefined and obj.material != undefined then (
-                        -- 获取贴图路径
-                        local texturePath = undefined
-                        if classof obj.material == MultiMaterial then (
-                            local matID = try(item.SubItems.Item[2].Text as integer)catch(1)
-                            if matID > 0 and matID <= obj.material.numsubs then (
-                                local subMat = obj.material[matID]
-                                if subMat != undefined then (
-                                    texturePath = case classof subMat of (
-                                        StandardMaterial: if subMat.diffuseMap != undefined then subMat.diffuseMap.filename else undefined
-                                        VRayMtl: if subMat.texmap_diffuse != undefined then subMat.texmap_diffuse.filename else undefined
-                                        PhysicalMaterial: if subMat.base_color_map != undefined then subMat.base_color_map.filename else undefined
-                                        default: undefined
-                                    )
-                                )
-                            )
-                        ) else (
-                            texturePath = case classof obj.material of (
-                                StandardMaterial: if obj.material.diffuseMap != undefined then obj.material.diffuseMap.filename else undefined
-                                VRayMtl: if obj.material.texmap_diffuse != undefined then obj.material.texmap_diffuse.filename else undefined
-                                PhysicalMaterial: if obj.material.base_color_map != undefined then obj.material.base_color_map.filename else undefined
-                                default: undefined
-                            )
+                    -- 初始化内存统计表格
+                    if not initMemoryStatsListView() then (
+                        format "表格初始化失败，尝试手动初始化\n"
+                        -- 手动设置基本属性
+                        try (
+                            lvMemoryStats.View = (dotNetClass "System.Windows.Forms.View").Details
+                            lvMemoryStats.GridLines = true
+                            lvMemoryStats.FullRowSelect = true
+                            
+                            -- 清除现有列并添加新列
+                            lvMemoryStats.Columns.Clear()
+                            lvMemoryStats.Columns.Add "统计项目" 130
+                            lvMemoryStats.Columns.Add "数值" 90
+                            
+                            -- 添加测试项
+                            local item = dotNetObject "System.Windows.Forms.ListViewItem" "手动初始化"
+                            item.SubItems.Add "成功"
+                            lvMemoryStats.Items.Add item
+                            
+                            g_resourceManager.registerDotNetObject lvMemoryStats
+                        ) catch (
+                            format "手动初始化表格失败: %\n" (getCurrentException())
                         )
+                    )
+                    
+                    -- 立即更新一次统计
+                    if not updateMemoryStats() then (
+                        format "更新统计数据失败，尝试添加默认数据\n"
+                        try (
+                            -- 添加默认数据
+                            lvMemoryStats.Items.Clear()
+                            local item1 = dotNetObject "System.Windows.Forms.ListViewItem" "3ds Max内存使用"
+                            item1.SubItems.Add ((heapSize() / 1048576.0) as string + " MB")
+                            lvMemoryStats.Items.Add item1
+                            
+                            local item2 = dotNetObject "System.Windows.Forms.ListViewItem" "可用内存"
+                            item2.SubItems.Add ((heapFree() / 1048576.0) as string + " MB")
+                            lvMemoryStats.Items.Add item2
+                        ) catch (
+                            format "添加默认数据失败: %\n" (getCurrentException())
+                        )
+                    )
+                    
+                    -- 启动定时更新
+                    startMemoryStatsTimer interval:5000
+                    
+                ) else (
+                    format "内存统计表格控件未找到，尝试创建\n"
+                    try (
+                        -- 尝试重新创建ListView控件
+                        lvMemoryStats = dotNetObject "System.Windows.Forms.ListView"
+                        lvMemoryStats.Bounds = dotNetObject "System.Drawing.Rectangle" 650 30 230 350
+                        lvMemoryStats.View = (dotNetClass "System.Windows.Forms.View").Details
+                        lvMemoryStats.GridLines = true
                         
-                        -- 如果找到贴图路径且文件存在
-                        if texturePath != undefined and doesFileExist texturePath then (
-                            -- 检查是否已处理过该文件
-                            if findItem processedFiles texturePath == 0 then (
-                                append processedFiles texturePath
-                                local result = fixTextureSize texturePath
-                                if result[1] then (
-                                    fixedCount += 1
-                                    item.SubItems.Item[4].Text = result[2]
-                                ) else (
-                                    errorCount += 1
-                                    item.SubItems.Item[4].Text = "修复失败: " + result[2]
-                                )
-                            )
-                        )
+                        -- 添加列
+                        lvMemoryStats.Columns.Add "统计项目" 130
+                        lvMemoryStats.Columns.Add "数值" 90
+                        
+                        -- 添加一个测试项
+                        local item = dotNetObject "System.Windows.Forms.ListViewItem" "新建控件测试"
+                        item.SubItems.Add "成功"
+                        lvMemoryStats.Items.Add item
+                        
+                        -- 添加到窗体
+                        replaceMissingMapsRollout.Controls.Add lvMemoryStats
+                        lvMemoryStats.visible = true
+                        
+                        -- 注册到资源管理器
+                        g_resourceManager.registerDotNetObject lvMemoryStats
+                    ) catch (
+                        format "创建内存统计表格失败: %\n" (getCurrentException())
+                        insertLog "内存统计表格创建失败，但内存监控仍会正常工作。"
                     )
                 )
+            ) else (
+                -- 停止内存监控
+                g_memoryMonitor.stopMonitoring()
+                insertLog "内存监控已停止。"
+                
+                -- 停止定时更新
+                stopMemoryStatsTimer()
+                
+                -- 隐藏右侧内存统计面板
+                if grpMemoryPanel != undefined then grpMemoryPanel.visible = false
+                if lvMemoryStats != undefined then lvMemoryStats.visible = false
+                
+                -- 恢复主窗口宽度
+                replaceMissingMapsRollout.width = 640
             )
-            
-            local endTime = timestamp()
-            local elapsedTime = (endTime - startTime) / 1000.0
-            
-            -- 生成日志信息
-            local logMessage = "------------------------ \r\n"
-            logMessage += "贴图修复完成\r\n"
-            logMessage += "成功修复: " + fixedCount as string + "张\r\n"
-            if errorCount > 0 then (
-                logMessage += "修复失败: " + errorCount as string + "张\r\n"
-            )
-            logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
-            logMessage += "------------------------ \r\n"
-            
-            insertLog logMessage clearPrevious:true
-            
-            -- 移除已修复的项
-            if fixedCount > 0 then (
-                local i = 0
-                while i < lvModels.Items.Count do (
-                    local item = lvModels.Items.Item[i]
-                    local errorText = item.SubItems.Item[4].Text as string
-                    -- 使用 matchPattern 进行字符串匹配
-                    if matchPattern errorText pattern:"非2次幂*" then (
-                        -- 移除该项
-                        lvModels.Items.RemoveAt i
-                    ) else (
-                        i += 1
-                    )
-                )
-            )
-            
         ) catch (
-            messageBox ("修复贴图时发生错误：" + (getCurrentException())) title:"错误"
+            messageBox ("切换内存监控时发生错误：" + (getCurrentException())) title:"错误"
         )
     )
 
     -- 添加窗口关闭事件处理
     on replaceMissingMapsRollout close do (
         try (
+            -- 停止内存监控
+            if g_memoryMonitor != undefined do (
+                g_memoryMonitor.stopMonitoring()
+            )
+            
+            -- 停止内存统计更新定时器
+            stopMemoryStatsTimer()
+            
             -- 清理ListView
             cleanupListView lvModels
+            
+            -- 清理内存统计表格
+            if lvMemoryStats != undefined do (
+                lvMemoryStats.Items.Clear()
+                g_resourceManager.unregisterDotNetObject lvMemoryStats
+                cleanupDotNetObject lvMemoryStats
+            )
             
             -- 清理文本框
             cleanupDotNetObject edtLog
@@ -3276,7 +3802,7 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
             cleanupDotNetObject cmbIDLimit
             
             -- 清理全局资源
-            cleanupResources()
+            enhancedCleanupResources()
             
         ) catch (
             format "清理主窗资源时出错: %\n" (getCurrentException())
@@ -3396,6 +3922,105 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
             local errorMsg = "检查更新时出错：" + (getCurrentException()) + "\n\n请访问 https://github.com/Rkesent/3DMAX_Integrated-plugins 手动检查更新。"
             messageBox errorMsg title:"更新错误"
             insertLog errorMsg
+        )
+    )
+
+    -- 修复贴图尺寸按钮事件
+    on btnFixTextures pressed do (
+        try (
+            local startTime = timestamp()
+            local processedFiles = #() -- 用于记录已处理的文件
+            local fixedCount = 0
+            local errorCount = 0
+            
+            -- 获取列表中的项目
+            local itemsToProcess = for i = 0 to lvModels.Items.Count - 1 collect lvModels.Items.Item[i]
+            
+            with redraw off (
+                for item in itemsToProcess do (
+                    local objName = item.Text
+                    local matName = item.SubItems.Item[1].Text
+                    local fileName = try(item.SubItems.Item[3].Text)catch("")
+                    
+                    -- 获取对象
+                    local obj = getNodeByName objName
+                    if obj != undefined and obj.material != undefined then (
+                        -- 获取贴图路径
+                        local texturePath = undefined
+                        if classof obj.material == MultiMaterial then (
+                            local matID = try(item.SubItems.Item[2].Text as integer)catch(1)
+                            if matID > 0 and matID <= obj.material.numsubs then (
+                                local subMat = obj.material[matID]
+                                if subMat != undefined then (
+                                    texturePath = case classof subMat of (
+                                        StandardMaterial: if subMat.diffuseMap != undefined then subMat.diffuseMap.filename else undefined
+                                        VRayMtl: if subMat.texmap_diffuse != undefined then subMat.texmap_diffuse.filename else undefined
+                                        PhysicalMaterial: if subMat.base_color_map != undefined then subMat.base_color_map.filename else undefined
+                                        default: undefined
+                                    )
+                                )
+                            )
+                        ) else (
+                            texturePath = case classof obj.material of (
+                                StandardMaterial: if obj.material.diffuseMap != undefined then obj.material.diffuseMap.filename else undefined
+                                VRayMtl: if obj.material.texmap_diffuse != undefined then obj.material.texmap_diffuse.filename else undefined
+                                PhysicalMaterial: if obj.material.base_color_map != undefined then obj.material.base_color_map.filename else undefined
+                                default: undefined
+                            )
+                        )
+                        
+                        -- 如果找到贴图路径且文件存在
+                        if texturePath != undefined and doesFileExist texturePath then (
+                            -- 检查是否已处理过该文件
+                            if findItem processedFiles texturePath == 0 then (
+                                append processedFiles texturePath
+                                local result = fixTextureSize texturePath
+                                if result[1] then (
+                                    fixedCount += 1
+                                    item.SubItems.Item[4].Text = result[2]
+                                ) else (
+                                    errorCount += 1
+                                    item.SubItems.Item[4].Text = "修复失败: " + result[2]
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+            
+            local endTime = timestamp()
+            local elapsedTime = (endTime - startTime) / 1000.0
+            
+            -- 生成日志信息
+            local logMessage = "------------------------ \r\n"
+            logMessage += "贴图修复完成\r\n"
+            logMessage += "成功修复: " + fixedCount as string + "张\r\n"
+            if errorCount > 0 then (
+                logMessage += "修复失败: " + errorCount as string + "张\r\n"
+            )
+            logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
+            logMessage += "------------------------ \r\n"
+            
+            insertLog logMessage clearPrevious:true
+            
+            -- 移除已修复的项
+            if fixedCount > 0 then (
+                local i = 0
+                while i < lvModels.Items.Count do (
+                    local item = lvModels.Items.Item[i]
+                    local errorText = try(item.SubItems.Item[4].Text as string)catch("")
+                    -- 使用 matchPattern 进行字符串匹配
+                    if matchPattern errorText pattern:"非2次幂*" then (
+                        -- 移除该项
+                        lvModels.Items.RemoveAt i
+                    ) else (
+                        i += 1
+                    )
+                )
+            )
+            
+        ) catch (
+            messageBox ("修复贴图时发生错误：" + (getCurrentException())) title:"错误"
         )
     )
 )
@@ -4026,3 +4651,103 @@ rollout textureRollbackRollout "贴图重命名撤回" width:400 height:320 (
 global textureRollbackRollout
 
 -- 贴图重命名历史管理
+
+-- 添加获取最近2的幂次方数的函数
+fn getNearestPowerOfTwo n = (
+    if n <= 0 then return 1
+    local power = 1
+    while power < n do power *= 2
+    -- 检查哪个2的幂次方更接近
+    local lowerPower = power / 2
+    if (n - lowerPower) < (power - n) then
+        return lowerPower
+    return power
+)
+
+-- 优化的贴图修复函数
+fn fixTextureSize filePath = (
+    try (
+        -- 检查文件是否存在和可访问
+        if not doesFileExist filePath then return #(false, "文件不存在")
+        
+        -- 使用安全位图操作器处理位图
+        return g_bitmapOperator.withBitmap filePath (
+            fn processBitmap bmap filePath = (
+                try (
+                    -- 获取尺寸
+                    local w = bmap.width
+                    local h = bmap.height
+                    
+                    -- 计算新的尺寸
+                    local newW = getNearestPowerOfTwo w
+                    local newH = getNearestPowerOfTwo h
+                    
+                    -- 如果尺寸已经是2的幂次方，则不需要处理
+                    if w == newW and h == newH then (
+                        return #(true, "尺寸已符合要求")
+                    )
+                    
+                    -- 创建临时文件名
+                    local fileDir = getFilenamePath filePath
+                    local fileName = getFilenameFile filePath
+                    local fileExt = getFilenameType filePath
+                    local tempPath = fileDir + fileName + "_temp" + fileExt
+                    
+                    -- 创建新的位图
+                    local newBmap = undefined
+                    
+                    try (
+                        -- 使用资源管理器管理新位图
+                        newBmap = bitmap newW newH filename:tempPath
+                        g_resourceManager.registerBitmap newBmap
+                        
+                        -- 复制并缩放图像
+                        copy bmap newBmap
+                        
+                        -- 保存新图像
+                        save newBmap
+                        
+                        -- 关闭并清理新位图资源
+                        close newBmap
+                        g_resourceManager.unregisterBitmap newBmap
+                        newBmap = undefined
+                        
+                        -- 替换原文件
+                        if doesFileExist tempPath then (
+                            try(deleteFile filePath)catch()
+                            try(renameFile tempPath filePath)catch(
+                                -- 如果重命名失败，尝试复制后删除
+                                copyFile tempPath filePath
+                                deleteFile tempPath
+                            )
+                        )
+                        
+                        return #(true, "已修改为 " + newW as string + "x" + newH as string)
+                    ) catch (
+                        -- 确保资源释放
+                        if newBmap != undefined do (
+                            try (
+                                close newBmap
+                                g_resourceManager.unregisterBitmap newBmap
+                            ) catch ()
+                        )
+                        
+                        throw  -- 重新抛出异常
+                    )
+                ) catch (
+                    -- 记录错误信息
+                    local errMsg = getCurrentException()
+                    format "修复贴图出错: %\n" errMsg
+                    return #(false, "修复失败: " + errMsg)
+                )
+            )
+        )
+        
+    ) catch (
+        -- 记录错误信息
+        local errMsg = getCurrentException()
+        format "修复贴图出错: %\n" errMsg
+        return #(false, "修复失败: " + errMsg)
+    )
+)
+
