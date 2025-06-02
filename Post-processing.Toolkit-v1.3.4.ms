@@ -553,61 +553,8 @@ fn getDetailedMemoryStats = (
     )
 )
 
--- 优化的位图尺寸检查函数
-fn optimizedCheckTextureSize filePath = (
-    return g_bitmapOperator.withBitmap filePath (
-        fn checkSize bmap filePath = (
-            try (
-                local w = bmap.width as integer
-                local h = bmap.height as integer
-                
-                if w <= 0 or h <= 0 then (
-                    return #(false, "无效尺寸")
-                )
-                
-                -- 检查是否为2的幂次方
-                local isPowerW = isPowerOfTwo w
-                local isPowerH = isPowerOfTwo h
-                
-                if not isPowerW or not isPowerH then (
-                    return #(false, w as string + "x" + h as string)
-                )
-                
-                return #(true, w as string + "x" + h as string)
-            ) catch (
-                return #(false, "检查失败: " + (getCurrentException()))
-            )
-        )
-    )
-)
-
--- 创建全局实例
-global g_resourceManager = GlobalResourceManager()
-global g_bitmapOperator = SafeBitmapOperator()
-global g_memoryMonitor = MemoryMonitor()
-
--- 基础函数定义
--- 确保formatNumberWithLeadingZeros是全局函数
-global formatNumberWithLeadingZeros
-fn formatNumberWithLeadingZeros num width = (
-    try (
-        -- 确保输入值有效
-        if num == undefined do num = 1
-        if width == undefined do width = 3
-        
-        -- 转换为字符串并填充
-        local numStr = num as string
-        while numStr.count < width do (
-            numStr = "0" + numStr
-        )
-        return numStr
-    ) catch (
-        -- 发生错误时返回默认值
-        return "001"
-    )
-)
-
-fn isPowerOfTwo n = (
+-- 修改isPowerOfTwo函数的名称以避免冲突
+fn checkIsPowerOfTwo n = (
     try (
         if n == undefined or n <= 0 then return false
         local i = 1
@@ -622,9 +569,10 @@ fn isPowerOfTwo n = (
     )
 )
 
-fn checkTextureSize bmap = (
+fn checkTextureSize input = (
     -- 如果直接传入位图对象
-    if bmap != undefined then (
+    if classof input == Bitmap then (
+        local bmap = input
         try (
             -- 首先检查输入参数是否有效
             if bmap == undefined then return #(false, "无效贴图")
@@ -646,8 +594,8 @@ fn checkTextureSize bmap = (
             )
             
             -- 检查是否为2的幂次方
-            local isPowerW = isPowerOfTwo w
-            local isPowerH = isPowerOfTwo h
+            local isPowerW = checkIsPowerOfTwo w
+            local isPowerH = checkIsPowerOfTwo h
             
             if not isPowerW or not isPowerH then (
                 return #(false, w as string + "x" + h as string)
@@ -657,16 +605,265 @@ fn checkTextureSize bmap = (
         ) catch (
             return #(false, "检查失败: " + (getCurrentException()))
         )
-    ) else (
+    ) else if classof input == String then (
         -- 如果传入的是文件路径，使用安全位图操作器
-        return optimizedCheckTextureSize bmap
+        return g_bitmapOperator.withBitmap input (
+            fn checkSize bmap filePath = (
+                try (
+                    local w = bmap.width as integer
+                    local h = bmap.height as integer
+                    
+                    if w <= 0 or h <= 0 then (
+                        return #(false, "无效尺寸")
+                    )
+                    
+                    -- 检查是否为2的幂次方
+                    local isPowerW = checkIsPowerOfTwo w
+                    local isPowerH = checkIsPowerOfTwo h
+                    
+                    if not isPowerW or not isPowerH then (
+                        return #(false, w as string + "x" + h as string)
+                    )
+                    
+                    return #(true, w as string + "x" + h as string)
+                ) catch (
+                    return #(false, "检查失败: " + (getCurrentException()))
+                )
+            )
+        )
+    ) else (
+        return #(false, "无效输入类型")
+    )
+)
+
+-- 修改其他引用isPowerOfTwo函数的位置
+fn optimizedCheckTextureSize filePath = (
+    return g_bitmapOperator.withBitmap filePath (
+        fn checkSize bmap filePath = (
+            try (
+                local w = bmap.width as integer
+                local h = bmap.height as integer
+                
+                if w <= 0 or h <= 0 then (
+                    return #(false, "无效尺寸")
+                )
+                
+                -- 检查是否为2的幂次方
+                local isPowerW = checkIsPowerOfTwo w
+                local isPowerH = checkIsPowerOfTwo h
+                
+                if not isPowerW or not isPowerH then (
+                    return #(false, w as string + "x" + h as string)
+                )
+                
+                return #(true, w as string + "x" + h as string)
+            ) catch (
+                return #(false, "检查失败: " + (getCurrentException()))
+            )
+        )
+    )
+)
+
+-- 修改fixTextureSize函数中可能的引用
+fn fixTextureSize filePath = (
+    try (
+        -- 检查文件是否存在和可访问
+        if not doesFileExist filePath then return #(false, "文件不存在")
+        
+        -- 使用安全位图操作器处理位图
+        return g_bitmapOperator.withBitmap filePath (
+            fn processBitmap bmap filePath = (
+                try (
+                    -- 获取尺寸
+                    local w = bmap.width
+                    local h = bmap.height
+                    
+                    -- 计算新的尺寸
+                    local newW = getNearestPowerOfTwo w
+                    local newH = getNearestPowerOfTwo h
+                    
+                    -- 如果尺寸已经是2的幂次方，则不需要处理
+                    if w == newW and h == newH then (
+                        return #(true, "尺寸已符合要求")
+                    )
+                    
+                    -- 创建临时文件名
+                    local fileDir = getFilenamePath filePath
+                    local fileName = getFilenameFile filePath
+                    local fileExt = getFilenameType filePath
+                    local tempPath = fileDir + fileName + "_temp" + fileExt
+                    
+                    -- 创建新的位图
+                    local newBmap = undefined
+                    
+                    try (
+                        -- 使用资源管理器管理新位图
+                        newBmap = bitmap newW newH filename:tempPath
+                        g_resourceManager.registerBitmap newBmap
+                        
+                        -- 复制并缩放图像
+                        copy bmap newBmap
+                        
+                        -- 保存新图像
+                        save newBmap
+                        
+                        -- 关闭并清理新位图资源
+                        close newBmap
+                        g_resourceManager.unregisterBitmap newBmap
+                        newBmap = undefined
+                        
+                        -- 替换原文件
+                        if doesFileExist tempPath then (
+                            try(deleteFile filePath)catch()
+                            try(renameFile tempPath filePath)catch(
+                                -- 如果重命名失败，尝试复制后删除
+                                copyFile tempPath filePath
+                                deleteFile tempPath
+                            )
+                        )
+                        
+                        return #(true, "已修改为 " + newW as string + "x" + newH as string)
+                    ) catch (
+                        -- 确保资源释放
+                        if newBmap != undefined do (
+                            try (
+                                close newBmap
+                                g_resourceManager.unregisterBitmap newBmap
+                            ) catch ()
+                        )
+                        
+                        throw  -- 重新抛出异常
+                    )
+                ) catch (
+                    -- 记录错误信息
+                    local errMsg = getCurrentException()
+                    format "修复贴图出错: %\n" errMsg
+                    return #(false, "修复失败: " + errMsg)
+                )
+            )
+        )
+        
+    ) catch (
+        -- 记录错误信息
+        local errMsg = getCurrentException()
+        format "修复贴图出错: %\n" errMsg
+        return #(false, "修复失败: " + errMsg)
+    )
+)
+
+-- 合并的贴图尺寸检查函数，替代之前的checkTextureSize和optimizedCheckTextureSize
+fn checkTextureSize input = (
+    -- 如果直接传入位图对象
+    if classof input == Bitmap then (
+        local bmap = input
+        try (
+            -- 首先检查输入参数是否有效
+            if bmap == undefined then return #(false, "无效贴图")
+            
+            -- 确保获取到有效的宽高值
+            local w = undefined
+            local h = undefined
+            
+            try (
+                w = bmap.width as integer
+                h = bmap.height as integer
+            ) catch (
+                return #(false, "无法获取贴图尺寸")
+            )
+            
+            -- 检查是否获取到有效值
+            if w == undefined or h == undefined or w <= 0 or h <= 0 then (
+                return #(false, "无效尺寸")
+            )
+            
+            -- 检查是否为2的幂次方
+            local isPowerW = checkIsPowerOfTwo w
+            local isPowerH = checkIsPowerOfTwo h
+            
+            if not isPowerW or not isPowerH then (
+                return #(false, w as string + "x" + h as string)
+            )
+            
+            return #(true, w as string + "x" + h as string)
+        ) catch (
+            return #(false, "检查失败: " + (getCurrentException()))
+        )
+    ) else if classof input == String then (
+        -- 如果传入的是文件路径，使用安全位图操作器
+        return g_bitmapOperator.withBitmap input (
+            fn checkSize bmap filePath = (
+                try (
+                    local w = bmap.width as integer
+                    local h = bmap.height as integer
+                    
+                    if w <= 0 or h <= 0 then (
+                        return #(false, "无效尺寸")
+                    )
+                    
+                    -- 检查是否为2的幂次方
+                    local isPowerW = checkIsPowerOfTwo w
+                    local isPowerH = checkIsPowerOfTwo h
+                    
+                    if not isPowerW or not isPowerH then (
+                        return #(false, w as string + "x" + h as string)
+                    )
+                    
+                    return #(true, w as string + "x" + h as string)
+                ) catch (
+                    return #(false, "检查失败: " + (getCurrentException()))
+                )
+            )
+        )
+    ) else (
+        return #(false, "无效输入类型")
+    )
+)
+
+-- 创建全局实例
+global g_resourceManager = GlobalResourceManager()
+global g_bitmapOperator = SafeBitmapOperator()
+global g_memoryMonitor = MemoryMonitor()
+
+-- 基础函数定义
+-- 确保formatNumberWithLeadingZeros是全局函数
+global formatNumberWithLeadingZeros
+fn formatNumberWithLeadingZeros num width = (
+    try (
+        -- 确保输入值有效
+        local validNum = if num == undefined then 1 else num as integer
+        if width == undefined do width = 3
+        
+        -- 转换为字符串并填充
+        local numStr = validNum as string
+        while numStr.count < width do (
+            numStr = "0" + numStr
+        )
+        return numStr
+    ) catch (
+        format "序号生成错误: %\n" (getCurrentException())
+        -- 发生错误时返回默认值
+        return "001"
+    )
+)
+
+fn isPowerOfTwo n = (
+    try (
+        if n == undefined or n <= 0 then return false
+        local i = 1
+        while i <= n do (
+            if i == n then return true
+            i *= 2
+            if i > n then return false -- 添加这个检查以避免无限循环
+        )
+        return false
+    ) catch (
+        return false
     )
 )
 
 -- 全局变量声明
--- 全局变量现在由资源管理器管理
--- global missingMaps = #()
--- global isProcessing = false
+global missingMaps = #()
+global isProcessing = false
 
 -- 内存统计更新计时器
 -- global updateMemoryStatsTimer = undefined
@@ -832,21 +1029,9 @@ fn trimAndValidateInput txt = (
     trimmed != ""
 )
 
--- 新增：序号生成函数
+-- 新增：序号生成函数 - 现在使用formatNumberWithLeadingZeros实现
 fn generateSequenceNumber num width = (
-    try (
-        -- 确保是有效数字
-        local validNum = if num == undefined then 1 else num as integer
-        -- 转换为字符串并填充
-        local numStr = validNum as string
-        while numStr.count < width do (
-            numStr = "0" + numStr
-        )
-        return numStr
-    ) catch (
-        format "序号生成错误: %\n" (getCurrentException())
-        return "001" -- 返回默认值
-    )
+    formatNumberWithLeadingZeros num width
 )
 
 -- 新增：对象重命名函数
@@ -1034,7 +1219,7 @@ fn _getMapName _material = (
 )
 
 -- 设置材质的名称和贴图名称
-fn _setMaterialName _material = (
+fn _setMaterialName _material nameRule:#default prefix:"MA" suffix:"" replacePattern:"" replaceWith:"" = (
     try (
         -- 检查材质是否为空
         if _material == undefined then return false
@@ -1043,19 +1228,45 @@ fn _setMaterialName _material = (
             matList = _material.MaterialList
             if matList != undefined and matList.count > 0 then (
                 for m in matList where m != undefined do (
-                    _setMaterialName m
+                    _setMaterialName m nameRule:nameRule prefix:prefix suffix:suffix replacePattern:replacePattern replaceWith:replaceWith
                 )
                 _mapName = _getMapName matList[1]
                 if _mapName != "" then (
-                    _mapName = substring _mapName 2 -1
-                    _material.name = "MATM" + _mapName
+                    -- 应用自定义命名规则
+                    case nameRule of (
+                        #default: _material.name = "MATM" + _mapName
+                        #customPrefix: _material.name = prefix + _mapName
+                        #customSuffix: _material.name = _mapName + suffix
+                        #prefixSuffix: _material.name = prefix + _mapName + suffix
+                        #replacePattern: (
+                            if replacePattern != "" then
+                                _material.name = substituteString _mapName replacePattern replaceWith
+                            else
+                                _material.name = "MATM" + _mapName
+                        )
+                        default: _material.name = "MATM" + _mapName
+                    )
                 )
             )
         )
         else (
             _mapName = _getMapName _material
             if(_mapName != "") then (
-                _material.name = "MA" + _mapName
+                -- 应用自定义命名规则
+                case nameRule of (
+                    #default: _material.name = "MA" + _mapName
+                    #customPrefix: _material.name = prefix + _mapName
+                    #customSuffix: _material.name = _mapName + suffix
+                    #prefixSuffix: _material.name = prefix + _mapName + suffix
+                    #replacePattern: (
+                        if replacePattern != "" then
+                            _material.name = substituteString _mapName replacePattern replaceWith
+                        else
+                            _material.name = "MA" + _mapName
+                    )
+                    default: _material.name = "MA" + _mapName
+                )
+                
                 if(_material.diffuseMap != undefined) then (
                     try(_material.diffuseMap.name = _mapName) catch()
                 )
@@ -1064,7 +1275,7 @@ fn _setMaterialName _material = (
                 )
             )
             else (
-                _material.name = "MAT"
+                _material.name = prefix + "MAT" + suffix
             )
         )
         return true
@@ -2864,7 +3075,7 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
     )
 
     -- 添加重命名弹窗rollout
-    rollout renameRollout "重命名工具" width:550 height:450
+    rollout renameRollout "重命名工具" width:550 height:600
     (
         local closeTimer = undefined
         -- 用于存储排除的贴图路径
@@ -2969,6 +3180,35 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
         button btnInclude "<<" pos:[250,330] width:50 height:25 tooltip:"将选中的贴图从排除列表中移除"
         button btnRefreshTextures "刷新贴图列表" pos:[220,400] width:100 height:25 tooltip:"刷新场景中的贴图列表"
         
+        -- 自定义材质命名功能组
+        GroupBox grpCustomMatNaming "自定义材质命名" pos:[10,440] width:530 height:150
+        
+        -- 命名规则选择
+        label lblNamingRule "命名规则:" pos:[20,460] width:80 height:20 textColor:labelColor
+        radioButtons radNamingRule "" pos:[100,460] width:420 height:20 labels:#("默认规则", "自定义前缀", "自定义后缀", "前缀+后缀", "替换模式") default:1 columns:3
+        
+        -- 前缀和后缀
+        label lblPrefix "前缀:" pos:[20,490] width:40 height:20 textColor:labelColor
+        editText edtPrefix "" pos:[65,490] width:80 height:20 text:"MA" enabled:false
+        
+        label lblSuffix "后缀:" pos:[160,490] width:40 height:20 textColor:labelColor
+        editText edtSuffix "" pos:[205,490] width:80 height:20 enabled:false
+        
+        -- 替换模式
+        label lblPattern "查找:" pos:[20,520] width:40 height:20 textColor:labelColor
+        editText edtPattern "" pos:[65,520] width:80 height:20 enabled:false
+        
+        label lblReplace "替换为:" pos:[160,520] width:50 height:20 textColor:labelColor
+        editText edtReplace "" pos:[215,520] width:80 height:20 enabled:false
+        
+        -- 预览功能
+        button btnPreview "预览" pos:[310,520] width:60 height:25 tooltip:"预览应用此规则后的材质名称"
+        label lblPreviewTitle "预览效果:" pos:[380,520] width:60 height:20 textColor:labelColor
+        editText edtPreviewResult "" pos:[440,520] width:90 height:20 readOnly:true
+        
+        -- 应用按钮
+        button btnApplyMatNaming "应用自定义材质命名" pos:[350,550] width:150 height:30 tooltip:"使用选定的规则为选中物体的材质命名"
+        
         -- 底部按钮
         button renameBtn "开始" pos:[420,15] width:120 height:30 tooltip:"执行勾选模块的功能"
         button useTextureBtn "将贴图名称作为材质名称" pos:[420,50] width:120 height:40 tooltip:"根据贴图名称自动设置材质名称"
@@ -3067,6 +3307,13 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
             
             -- 更新列表显示
             updateTextureListsDisplay()
+            
+            -- 初始化自定义材质命名控件
+            radNamingRule.state = 1
+            edtPrefix.enabled = false
+            edtSuffix.enabled = false
+            edtPattern.enabled = false
+            edtReplace.enabled = false
         )
         
         -- 刷新贴图列表按钮事件
@@ -3563,7 +3810,7 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
                                 if not hasEmptyMat then (
                                     -- 优化材质
                                     optimaizeMat item
-                                    if(_setMaterialName item.material) then (
+                                    if(_setMaterialName item.material nameRule:#default) then (
                                         item.material.name = "MAT_" + substring item.name 4 item.name.count
                                         processedCount += 1
                                     )
@@ -3577,7 +3824,7 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
                             )
                         )
                         else (
-                            if(_setMaterialName item.material) then (
+                            if(_setMaterialName item.material nameRule:#default) then (
                                 processedCount += 1
                             )
                             else (
@@ -3631,6 +3878,272 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
                 messageBox ("处理材质命名时发生错误：" + (getCurrentException())) title:"错误"
             )
         )
+        
+        -- 添加右键点击事件处理，使用内嵌的自定义材质命名UI
+        on useTextureBtn rightClick do (
+            try (
+                if selection.count == 0 then (
+                    messageBox "请先选择要处理的模型！" title:"提示"
+                    return undefined
+                )
+                
+                -- 自动滚动到自定义材质命名部分
+                scrollAmount = 440
+                -- 对于已知的UI控件，可以使用以下方式滚动
+                if (renameRollout.controls[1].classID == #ScrollBar) then
+                    renameRollout.controls[1].value = scrollAmount
+            ) catch (
+                messageBox ("处理右键点击事件时发生错误：" + (getCurrentException())) title:"错误"
+            )
+        )
+
+        -- 命名规则选择事件
+        on radNamingRule changed state do (
+            -- 根据不同的命名规则启用或禁用相关控件
+            case state of (
+                1: ( -- 默认规则
+                    edtPrefix.enabled = false
+                    edtSuffix.enabled = false
+                    edtPattern.enabled = false
+                    edtReplace.enabled = false
+                )
+                2: ( -- 自定义前缀
+                    edtPrefix.enabled = true
+                    edtSuffix.enabled = false
+                    edtPattern.enabled = false
+                    edtReplace.enabled = false
+                )
+                3: ( -- 自定义后缀
+                    edtPrefix.enabled = false
+                    edtSuffix.enabled = true
+                    edtPattern.enabled = false
+                    edtReplace.enabled = false
+                )
+                4: ( -- 前缀+后缀
+                    edtPrefix.enabled = true
+                    edtSuffix.enabled = true
+                    edtPattern.enabled = false
+                    edtReplace.enabled = false
+                )
+                5: ( -- 替换模式
+                    edtPrefix.enabled = false
+                    edtSuffix.enabled = false
+                    edtPattern.enabled = true
+                    edtReplace.enabled = true
+                )
+            )
+            
+            -- 清空预览结果
+            edtPreviewResult.text = ""
+        )
+        
+        -- 预览按钮事件处理程序
+        on btnPreview pressed do (
+            try (
+                -- 获取当前选中的对象
+                local selObjects = selection as array
+                if selObjects.count == 0 then (
+                    messageBox "请先选择至少一个有材质的对象！" title:"提示"
+                    return undefined
+                )
+                
+                -- 找到第一个带有材质的对象
+                local targetObj = undefined
+                local targetMat = undefined
+                
+                for obj in selObjects where obj != undefined and obj.material != undefined do (
+                    targetObj = obj
+                    
+                    -- 获取材质
+                    if classof obj.material == Multimaterial and obj.material.materialList.count > 0 then (
+                        -- 获取第一个有效的子材质
+                        for subMat in obj.material.materialList where subMat != undefined do (
+                            targetMat = subMat
+                            exit
+                        )
+                    ) else (
+                        targetMat = obj.material
+                    )
+                    
+                    if targetMat != undefined then exit
+                )
+                
+                if targetMat == undefined then (
+                    messageBox "所选对象没有有效材质！" title:"提示"
+                    return undefined
+                )
+                
+                -- 获取贴图名称
+                local _mapName = _getMapName targetMat
+                if _mapName == "" then (
+                    edtPreviewResult.text = "无贴图"
+                    return undefined
+                )
+                
+                -- 获取命名规则和参数
+                local nameRule
+                local prefix = edtPrefix.text
+                local suffix = edtSuffix.text
+                local replacePattern = edtPattern.text
+                local replaceWith = edtReplace.text
+                local previewName = ""
+                
+                case radNamingRule.state of (
+                    1: ( -- 默认规则
+                        -- 根据材质类型判断前缀，安全地检查parent属性是否存在
+                        local isSubMaterial = false
+                        try(isSubMaterial = (targetMat.parent != undefined and classof targetMat.parent == Multimaterial))catch()
+                        
+                        if isSubMaterial then
+                            previewName = "MATM" + _mapName
+                        else
+                            previewName = "MA" + _mapName
+                    )
+                    2: ( -- 自定义前缀
+                        previewName = prefix + _mapName
+                    )
+                    3: ( -- 自定义后缀
+                        previewName = _mapName + suffix
+                    )
+                    4: ( -- 前缀+后缀
+                        previewName = prefix + _mapName + suffix
+                    )
+                    5: ( -- 替换模式
+                        if replacePattern != "" then
+                            previewName = substituteString _mapName replacePattern replaceWith
+                        else
+                            previewName = _mapName
+                    )
+                )
+                
+                -- 显示预览结果
+                edtPreviewResult.text = previewName
+            ) catch (
+                edtPreviewResult.text = "预览失败"
+                format "预览材质名称时出错: %\n" (getCurrentException())
+            )
+        )
+
+        -- 应用自定义材质命名按钮事件
+        on btnApplyMatNaming pressed do (
+            try (
+                local startTime = timestamp()
+                local processedCount = 0
+                local errorCount = 0
+                local emptyMatCount = 0
+                
+                -- 获取当前选中的对象
+                local selObjects = selection as array
+                if selObjects.count == 0 then (
+                    messageBox "请先选择要处理的模型！" title:"提示"
+                    return undefined
+                )
+                
+                -- 获取命名规则
+                local nameRule
+                local prefix = edtPrefix.text
+                local suffix = edtSuffix.text
+                local replacePattern = edtPattern.text
+                local replaceWith = edtReplace.text
+                
+                case radNamingRule.state of (
+                    1: nameRule = #default
+                    2: nameRule = #customPrefix
+                    3: nameRule = #customSuffix
+                    4: nameRule = #prefixSuffix
+                    5: nameRule = #replacePattern
+                )
+                
+                -- 清空主窗口的列表
+                if replaceMissingMapsRollout.lvModels != undefined do (
+                    replaceMissingMapsRollout.lvModels.Items.Clear()
+                )
+                
+                for item in selObjects do (
+                    if item.material != undefined then (
+                        if (classof item.material == Multimaterial) then (
+                            try (
+                                local hasEmptyMat = false
+                                -- 检查多重材质中是否有空材质
+                                for i = 1 to item.material.numsubs do (
+                                    if item.material[i] == undefined then (
+                                        -- 添加到列表中
+                                        local listItem = dotNetObject "System.Windows.Forms.ListViewItem" item.name
+                                        listItem.SubItems.Add "多重材质"
+                                        listItem.SubItems.Add (i as string)
+                                        listItem.SubItems.Add ""
+                                        listItem.SubItems.Add "材质ID " + i as string + " 为空"
+                                        listItem.ForeColor = (dotNetClass "System.Drawing.Color").Red
+                                        replaceMissingMapsRollout.lvModels.Items.Add listItem
+                                        
+                                        hasEmptyMat = true
+                                        emptyMatCount += 1
+                                    )
+                                )
+                                
+                                -- 如果没有材质，则进行命名
+                                if not hasEmptyMat then (
+                                    -- 优化材质
+                                    optimaizeMat item
+                                    if(_setMaterialName item.material nameRule:nameRule prefix:prefix suffix:suffix replacePattern:replacePattern replaceWith:replaceWith) then (
+                                        processedCount += 1
+                                    )
+                                    else (
+                                        errorCount += 1
+                                    )
+                                )
+                            ) catch (
+                                errorCount += 1
+                                format "Error processing multimaterial: %\n" (getCurrentException())
+                            )
+                        )
+                        else (
+                            if(_setMaterialName item.material nameRule:nameRule prefix:prefix suffix:suffix replacePattern:replacePattern replaceWith:replaceWith) then (
+                                processedCount += 1
+                            )
+                            else (
+                                errorCount += 1
+                            )
+                        )
+                    )
+                    else (
+                        -- 添加无材质的物体到列表
+                        local listItem = dotNetObject "System.Windows.Forms.ListViewItem" item.name
+                        listItem.SubItems.Add "无材质"
+                        listItem.SubItems.Add "0"
+                        listItem.SubItems.Add ""
+                        listItem.SubItems.Add "物体无材质"
+                        listItem.ForeColor = (dotNetClass "System.Drawing.Color").Red
+                        replaceMissingMapsRollout.lvModels.Items.Add listItem
+                        emptyMatCount += 1
+                    )
+                )
+                
+                try(displayMat()) catch()
+                
+                local endTime = timestamp()
+                local elapsedTime = (endTime - startTime) / 1000.0
+                
+                -- 生成日志信息
+                local logMessage = "------------------------ \r\n"
+                logMessage += "自定义材质命名完成\r\n"
+                logMessage += "成功处理材质数: " + processedCount as string + "\r\n"
+                if errorCount > 0 then (
+                    logMessage += "处理失败数: " + errorCount as string + "\r\n"
+                )
+                if emptyMatCount > 0 then (
+                    logMessage += "空材质/无材质数: " + emptyMatCount as string + "\r\n"
+                )
+                logMessage += "耗时: " + elapsedTime as string + " 秒\r\n"
+                logMessage += "------------------------ \r\n"
+                
+                -- 更新日志
+                insertLog logMessage
+            )
+            catch (
+                messageBox ("处理自定义材质命名时发生错误：" + (getCurrentException())) title:"错误"
+            )
+        )
 
         -- 在 renameRollout 中添加关闭事件处理
         on renameRollout close do (
@@ -3655,6 +4168,13 @@ rollout replaceMissingMapsRollout "后处理工具集合-v1.3.4" width:640 heigh
                 -- 清理贴图列表控件
                 cleanupDotNetObject lbAllTextures
                 cleanupDotNetObject lbExcludedTextures
+                
+                -- 清理自定义材质命名控件
+                cleanupDotNetObject edtPrefix
+                cleanupDotNetObject edtSuffix
+                cleanupDotNetObject edtPattern
+                cleanupDotNetObject edtReplace
+                cleanupDotNetObject edtPreviewResult
                 
                 -- 清理其他资源
                 cleanupResources()
@@ -4893,6 +5413,208 @@ fn fixTextureSize filePath = (
         local errMsg = getCurrentException()
         format "修复贴图出错: %\n" errMsg
         return #(false, "修复失败: " + errMsg)
+    )
+)
+
+-- 定义自定义材质命名对话框
+rollout customMaterialNaming "自定义材质命名" width:400 height:380 (
+    -- 命名规则选择
+    groupBox grpNamingRule "命名规则" pos:[10,10] width:380 height:120
+    
+    radioButtons radNamingRule "" labels:#("默认规则", "自定义前缀", "自定义后缀", "前缀+后缀", "替换模式") pos:[20,30] width:350 columns:3
+    
+    label lblPrefix "前缀:" pos:[20,70] width:40 height:20
+    editText edtPrefix "" pos:[65,70] width:80 height:20 text:"MA"
+    
+    label lblSuffix "后缀:" pos:[160,70] width:40 height:20
+    editText edtSuffix "" pos:[205,70] width:80 height:20
+    
+    label lblPattern "查找:" pos:[20,100] width:40 height:20
+    editText edtPattern "" pos:[65,100] width:80 height:20 
+    
+    label lblReplace "替换为:" pos:[160,100] width:50 height:20
+    editText edtReplace "" pos:[215,100] width:80 height:20
+    
+    -- 命名预览
+    groupBox grpPreview "命名预览" pos:[10,140] width:380 height:120
+    
+    label lblOrigMapName "原始贴图名:" pos:[20,160] width:100 height:20
+    label lblMapName "" pos:[125,160] width:250 height:20
+    
+    label lblMaterialName "材质名预览:" pos:[20,190] width:100 height:20
+    label lblMatPreview "" pos:[125,190] width:250 height:20
+    
+    -- 更新预览按钮
+    button btnUpdatePreview "更新预览" pos:[150,220] width:100 height:25
+    
+    -- 应用按钮
+    button btnApply "应用到选中对象" pos:[100,280] width:200 height:30
+    
+    -- 设置保存
+    groupBox grpSave "保存设置" pos:[10,320] width:380 height:50
+    checkBox chkSaveSettings "记住这些设置" pos:[20,340] width:120 height:20 checked:false
+    button btnSaveDefault "设为默认值" pos:[250,340] width:120 height:25
+    
+    -- 初始化
+    on customMaterialNaming open do (
+        -- 禁用不需要的控件
+        edtPrefix.enabled = false
+        edtSuffix.enabled = false
+        edtPattern.enabled = false
+        edtReplace.enabled = false
+        
+        -- 如果有选中对象，尝试获取贴图名称进行预览
+        if selection.count > 0 and selection[1].material != undefined then (
+            local mat = selection[1].material
+            if classof mat == MultiMaterial and mat.numsubs > 0 and mat[1] != undefined then
+                mat = mat[1]
+            
+            local mapName = _getMapName mat
+            if mapName != "" then
+                lblMapName.text = mapName
+        )
+        
+        -- 加载保存的设置（如果存在）
+        try (
+            local iniFile = getMAXIniFile()
+            local section = "CustomMaterialNaming"
+            
+            if hasINISetting iniFile section "NamingRule" then (
+                radNamingRule.state = getINISetting iniFile section "NamingRule" as integer
+                
+                edtPrefix.text = getINISetting iniFile section "Prefix"
+                edtSuffix.text = getINISetting iniFile section "Suffix"
+                edtPattern.text = getINISetting iniFile section "Pattern"
+                edtReplace.text = getINISetting iniFile section "ReplaceWith"
+                
+                -- 根据规则启用相应控件
+                radNamingRule.changed radNamingRule.state
+                
+                -- 更新预览
+                btnUpdatePreview.pressed()
+            )
+        ) catch ()
+    )
+    
+    -- 根据选择的命名规则启用/禁用相应的输入框
+    on radNamingRule changed state do (
+        case state of (
+            1: ( -- 默认规则
+                edtPrefix.enabled = false
+                edtSuffix.enabled = false
+                edtPattern.enabled = false
+                edtReplace.enabled = false
+            )
+            2: ( -- 自定义前缀
+                edtPrefix.enabled = true
+                edtSuffix.enabled = false
+                edtPattern.enabled = false
+                edtReplace.enabled = false
+            )
+            3: ( -- 自定义后缀
+                edtPrefix.enabled = false
+                edtSuffix.enabled = true
+                edtPattern.enabled = false
+                edtReplace.enabled = false
+            )
+            4: ( -- 前缀+后缀
+                edtPrefix.enabled = true
+                edtSuffix.enabled = true
+                edtPattern.enabled = false
+                edtReplace.enabled = false
+            )
+            5: ( -- 替换模式
+                edtPrefix.enabled = false
+                edtSuffix.enabled = false
+                edtPattern.enabled = true
+                edtReplace.enabled = true
+            )
+        )
+        
+        -- 更新预览
+        btnUpdatePreview.pressed()
+    )
+    
+    -- 更新预览
+    on btnUpdatePreview pressed do (
+        local mapName = lblMapName.text
+        if mapName != "" then (
+            local preview = ""
+            case radNamingRule.state of (
+                1: preview = "MA" + mapName
+                2: preview = edtPrefix.text + mapName
+                3: preview = mapName + edtSuffix.text
+                4: preview = edtPrefix.text + mapName + edtSuffix.text
+                5: (
+                    if edtPattern.text != "" then
+                        preview = substituteString mapName edtPattern.text edtReplace.text
+                    else
+                        preview = "MA" + mapName
+                )
+                default: preview = "MA" + mapName
+            )
+            lblMatPreview.text = preview
+        )
+    )
+    
+    -- 保存设置
+    fn saveSettings = (
+        try (
+            local iniFile = getMAXIniFile()
+            local section = "CustomMaterialNaming"
+            
+            setINISetting iniFile section "NamingRule" (radNamingRule.state as string)
+            setINISetting iniFile section "Prefix" edtPrefix.text
+            setINISetting iniFile section "Suffix" edtSuffix.text
+            setINISetting iniFile section "Pattern" edtPattern.text
+            setINISetting iniFile section "ReplaceWith" edtReplace.text
+        ) catch ()
+    )
+    
+    -- 保存为默认值
+    on btnSaveDefault pressed do (
+        saveSettings()
+        messageBox "当前设置已保存为默认值" title:"设置保存"
+    )
+    
+    -- 应用按钮
+    on btnApply pressed do (
+        local nameRule
+        local prefix = edtPrefix.text
+        local suffix = edtSuffix.text
+        local replacePattern = edtPattern.text
+        local replaceWith = edtReplace.text
+        
+        -- 保存设置（如果选中）
+        if chkSaveSettings.checked then saveSettings()
+        
+        case radNamingRule.state of (
+            1: nameRule = #default
+            2: nameRule = #customPrefix
+            3: nameRule = #customSuffix
+            4: nameRule = #prefixSuffix
+            5: nameRule = #replacePattern
+        )
+        
+        local processedCount = 0
+        local errorCount = 0
+        
+        -- 处理选中对象
+        for obj in selection where obj.material != undefined do (
+            try (
+                if _setMaterialName obj.material nameRule:nameRule prefix:prefix suffix:suffix replacePattern:replacePattern replaceWith:replaceWith then
+                    processedCount += 1
+                else
+                    errorCount += 1
+            ) catch (
+                errorCount += 1
+            )
+        )
+        
+        -- 更新材质编辑器显示
+        try(displayMat()) catch()
+        
+        messageBox ("处理完成\n成功: " + processedCount as string + "\n失败: " + errorCount as string) title:"自定义材质命名"
     )
 )
 
