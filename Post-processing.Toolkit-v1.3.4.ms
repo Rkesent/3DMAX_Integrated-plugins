@@ -276,13 +276,7 @@ fn enhancedCleanupResources = (
             )
             -- 尝试其他方法清理材质
             else (
-                -- 尝试使用MatEditor
-                if (execute "MatEditor") != undefined and (execute "MatEditor.Close") != undefined then (
-                    execute "MatEditor.Close()"
-                    format "已关闭材质编辑器\n"
-                )
-                
-                -- 尝试使用垃圾回收来清理材质
+                -- 不再关闭材质编辑器，仅执行垃圾回收
                 gc()
                 format "使用垃圾回收清理材质\n"
             )
@@ -1228,7 +1222,46 @@ fn _setMaterialName _material nameRule:#default prefix:"MA" suffix:"" replacePat
             matList = _material.MaterialList
             if matList != undefined and matList.count > 0 then (
                 for m in matList where m != undefined do (
-                    _setMaterialName m nameRule:nameRule prefix:prefix suffix:suffix replacePattern:replacePattern replaceWith:replaceWith
+                    -- 检查材质类型，如果不是标准材质，转换为标准材质
+                    if classof m != StandardMaterial then (
+                        try (
+                            local oldMaterial = m
+                            local newStdMat = StandardMaterial()
+                            -- 复制属性
+                            newStdMat.name = oldMaterial.name
+                            
+                            -- 复制diffuse颜色
+                            case classof oldMaterial of (
+                                VRayMtl: newStdMat.diffuse = oldMaterial.diffuse
+                                PhysicalMaterial: newStdMat.diffuse = oldMaterial.base_color
+                                default: newStdMat.diffuse = color 128 128 128
+                            )
+                            
+                            -- 复制贴图
+                            local oldMap = case classof oldMaterial of (
+                                VRayMtl: oldMaterial.texmap_diffuse
+                                PhysicalMaterial: oldMaterial.base_color_map
+                                default: undefined
+                            )
+                            
+                            if oldMap != undefined then newStdMat.diffuseMap = oldMap
+                            
+                            -- 替换材质
+                            local matIndex = findItem matList oldMaterial
+                            if matIndex > 0 then _material[matIndex] = newStdMat
+                            
+                            -- 弹出转换提示
+                            messageBox ("已将非标准材质类型转换为标准材质：" + oldMaterial.name) title:"材质类型转换"
+                            
+                            -- 设置名称
+                            _setMaterialName newStdMat nameRule:nameRule prefix:prefix suffix:suffix replacePattern:replacePattern replaceWith:replaceWith
+                        ) catch (
+                            format "材质转换失败: %\n" (getCurrentException())
+                        )
+                    ) else (
+                        -- 已经是标准材质，直接设置名称
+                        _setMaterialName m nameRule:nameRule prefix:prefix suffix:suffix replacePattern:replacePattern replaceWith:replaceWith
+                    )
                 )
                 _mapName = _getMapName matList[1]
                 if _mapName != "" then (
@@ -1250,6 +1283,45 @@ fn _setMaterialName _material nameRule:#default prefix:"MA" suffix:"" replacePat
             )
         )
         else (
+            -- 检查材质类型，如果不是标准材质，转换为标准材质
+            if classof _material != StandardMaterial then (
+                try (
+                    local oldMaterial = _material
+                    local newStdMat = StandardMaterial()
+                    -- 复制属性
+                    newStdMat.name = oldMaterial.name
+                    
+                    -- 复制diffuse颜色
+                    case classof oldMaterial of (
+                        VRayMtl: newStdMat.diffuse = oldMaterial.diffuse
+                        PhysicalMaterial: newStdMat.diffuse = oldMaterial.base_color
+                        default: newStdMat.diffuse = color 128 128 128
+                    )
+                    
+                    -- 复制贴图
+                    local oldMap = case classof oldMaterial of (
+                        VRayMtl: oldMaterial.texmap_diffuse
+                        PhysicalMaterial: oldMaterial.base_color_map
+                        default: undefined
+                    )
+                    
+                    if oldMap != undefined then newStdMat.diffuseMap = oldMap
+                    
+                    -- 查找使用该材质的对象并替换材质
+                    for obj in objects where obj.material == oldMaterial do (
+                        obj.material = newStdMat
+                    )
+                    
+                    -- 弹出转换提示
+                    messageBox ("已将非标准材质类型转换为标准材质：" + oldMaterial.name) title:"材质类型转换"
+                    
+                    -- 更新材质引用
+                    _material = newStdMat
+                ) catch (
+                    format "材质转换失败: %\n" (getCurrentException())
+                )
+            )
+            
             _mapName = _getMapName _material
             if(_mapName != "") then (
                 -- 应用自定义命名规则
